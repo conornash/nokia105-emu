@@ -29,13 +29,15 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
-- A live window paced to real time while the phone is idle.
+- A live window that runs at the phone's real speed: home screen about
+  7.5 s after launch, menus open instantly.
+- Headless runs several times faster than real time (boot to the home
+  screen in under 2 s).
 
 Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
 - No sound, no camera, no USB, no file system writes persisting between
   runs.
-- Busy phases (boot, opening menus) run slower than on the real phone.
 - Only tested with firmware `MOCOR_20C_6531E_W23.19.4` from a TA-1423.
   Other SC6531E phones will need changes.
 
@@ -51,12 +53,12 @@ git clone https://github.com/rohit746/nokia105-emu
 cd nokia105-emu
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-make                          # builds the LZMA helper library
+make                          # builds the two native helper libraries
 mkdir dump                    # put flash.bin and bootrom.bin here
 ./run.sh                      # opens the live window
 ```
 
-Boot takes about 15 s of wall time.
+The phone takes about 7.5 s to reach the home screen, as on real hardware.
 
 ### Controls
 
@@ -85,7 +87,8 @@ same options and saves every new screen to `out/frames/`.
 | `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down` |
 | `--max-blocks N` | stop after N translation blocks (4000 blocks = 1 ms) |
 | `--battery-mv MV`, `--no-battery`, `--adc CH=RAW` | power-supply readings |
-| `--break ADDR,…`, `--trace-blocks A:B`, `--trace-after BLOCK`, `-v` | debugging |
+| `--break ADDR,…`, `--trace-after BLOCK`, `--trace-addrs LO:HI` | debugging: breakpoints, MMIO trace to `out/mmio_trace.log` |
+| `--slow`, `--trace-blocks A:B`, `-v` | per-block Python hook: counts unique blocks, traces blocks (much slower) |
 
 Example, headless: boot, open the menu and save the screens:
 
@@ -100,9 +103,13 @@ counts and every peripheral register touched; `out/psram.bin` and
 ## How it works
 
 - **Time** is counted in translation blocks: 4000 blocks are one emulated
-  millisecond. When the firmware executes wait-for-interrupt, the emulator
-  skips ahead to the next timer or device event (or, in the live window,
-  waits for the wall clock to catch up).
+  millisecond. A small native block hook (`blockclock.c`, registered
+  through Unicorn's C API) counts them and only returns to Python when a
+  timer or device event is due or an interrupt can be taken. It also keeps
+  the system's millisecond and 32 kHz counters current in memory, so the
+  firmware's delay loops run at native speed. When the firmware executes
+  wait-for-interrupt, the emulator skips ahead to the next event; in the
+  live window it is paced to the wall clock instead.
 - **Interrupts** come from the device models through the interrupt
   controller; `arm_exc.py` delivers IRQs and aborts itself, walking the
   guest's page tables for faulting addresses.
@@ -123,6 +130,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | File | |
 |---|---|
 | `emu.py` | machine: memory map, register file, scheduler, CLI |
+| `blockclock.c` | native block hook: the emulated clock |
 | `live.py`, `run.sh` | live window |
 | `arm_exc.py` | exception entry and page-table walks |
 | `irq.py` | interrupt controller and timers |

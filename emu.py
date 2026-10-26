@@ -21,12 +21,13 @@ import traceback
 from pathlib import Path
 
 import capstone
-from unicorn import (UC_ARCH_ARM, UC_HOOK_BLOCK, UC_HOOK_INTR,
+from unicorn import (UC_ARCH_ARM, UC_HOOK_BLOCK, UC_HOOK_CODE, UC_HOOK_INTR,
                      UC_HOOK_MEM_UNMAPPED, UC_MEM_FETCH_UNMAPPED,
                      UC_MEM_WRITE_UNMAPPED, UC_MODE_ARM, UC_PROT_ALL,
-                     UC_PROT_READ, UC_PROT_EXEC, Uc, UcError)
+                     UC_PROT_READ, UC_PROT_WRITE, UC_PROT_EXEC, Uc, UcError)
 from unicorn.arm_const import UC_CPU_ARM_926
 import unicorn.arm_const as arm
+from unicorn.unicorn_py3.unicorn import uc_hook_h, uclib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import arm_exc  # noqa: E402
@@ -48,6 +49,28 @@ def default_dump():
     if os.environ.get("NOKIA_DUMP"):
         return Path(os.environ["NOKIA_DUMP"])
     return ROOT / "dump" if (ROOT / "dump").is_dir() else ROOT.parent / "dump"
+
+CLOCK_LIB = ROOT / ("libblockclock.dylib" if sys.platform == "darwin" else "libblockclock.so")
+
+
+class Clock(ctypes.Structure):
+    """struct clock in blockclock.c, shared with the native block hook."""
+    _fields_ = [("nblocks", ctypes.c_uint64), ("deadline", ctypes.c_uint64),
+                ("last_addr", ctypes.c_uint64), ("irq_pending", ctypes.c_uint32),
+                ("reason", ctypes.c_uint32), ("spin", ctypes.c_uint32),
+                ("spin_limit", ctypes.c_uint32), ("cpsr_id", ctypes.c_int32),
+                ("blocks_per_ms", ctypes.c_uint32), ("emu_stop", ctypes.c_void_p),
+                ("reg_read", ctypes.c_void_p), ("counters", ctypes.c_void_p),
+                ("next_ms", ctypes.c_uint64), ("next_tick", ctypes.c_uint64)]
+
+
+STOP_DEADLINE, STOP_IRQ, STOP_SPIN = 1, 2, 4
+# System counter page: +0x04 32 kHz ticks, +0x0c milliseconds (both read-only
+# counts of emulated time); +0x00/+0x08 are plain storage. In fast mode it is
+# host memory kept current by blockclock.c instead of MMIO.
+COUNTER_PAGE = 0x81003000
+PROGRESS_BLOCKS = 2_000_000
+PACE_BLOCKS = 10 * 4000   # real-time mode: check the wall clock every 10 ms
 
 BOOTROM_SIZE = 0x16000
 FLASH_BASE = 0x10000000   # memory-mapped SPI flash (custom FDL: FW_ADDR)
@@ -298,9 +321,13 @@ class Machine:
         self.blocks = collections.deque(maxlen=48)
         self.coverage = set()
         self.region = None
-        self.nblocks = 0
+        self.clock = Clock()      # nblocks lives here, see the property
+        # the native block hook (blockclock.c) unless per-block Python work
+        # is asked for (--slow, -v, --trace-blocks)
+        self.fast = not (args.slow or args.verbose or args.trace_blocks != (0, -1))
         self.spin = 0
-        self.next_progress = 2_000_000
+        self.next_progress = PROGRESS_BLOCKS
+        self.next_pace = None
         self.stop_reason = None
         self.trace = open(args.out / "mmio_trace.log", "w")
         self.trace_lines = 0
@@ -351,9 +378,55 @@ class Machine:
         self.exc_log = open(args.out / "exceptions.log", "w")
         self.exc = arm_exc.ExceptionEntry(self.uc, log=print)
         self.exc_repeats = collections.Counter()
-        self.uc.hook_add(UC_HOOK_BLOCK, self._guard(self._on_block))
+        if self.fast:
+            self._install_clock()
+            for addr in args.breaks:
+                self.uc.hook_add(UC_HOOK_CODE, self._guard(self._on_break), begin=addr, end=addr)
+        else:
+            self.uc.hook_add(UC_HOOK_BLOCK, self._guard(self._on_block))
+        self.update_deadline()
         self.uc.hook_add(UC_HOOK_MEM_UNMAPPED, self._guard(self._on_unmapped, False))
         self.uc.hook_add(UC_HOOK_INTR, self._guard(self._on_intr))
+
+    @property
+    def nblocks(self):
+        """Emulated time in translation blocks (BLOCKS_PER_MS per ms)."""
+        return self.clock.nblocks
+
+    @nblocks.setter
+    def nblocks(self, value):
+        self.clock.nblocks = value
+
+    def _install_clock(self):
+        """Register blockclock.c's hook through Unicorn's C API."""
+        if not CLOCK_LIB.exists():
+            raise SystemExit(f"{CLOCK_LIB.name} not found: run `make` in {ROOT} first")
+        self._clock_lib = ctypes.CDLL(str(CLOCK_LIB))
+        c = self.clock
+        c.spin_limit = self.args.poll_limit
+        c.cpsr_id = arm.UC_ARM_REG_CPSR
+        c.blocks_per_ms = BLOCKS_PER_MS
+        c.counters = ctypes.addressof(self.counter_page)
+        c.emu_stop = ctypes.cast(uclib.uc_emu_stop, ctypes.c_void_p).value
+        c.reg_read = ctypes.cast(uclib.uc_reg_read, ctypes.c_void_p).value
+        self._clock_hook = uc_hook_h()
+        err = uclib.uc_hook_add(self.uc._uch, ctypes.byref(self._clock_hook), UC_HOOK_BLOCK,
+                                ctypes.cast(self._clock_lib.clock_block_hook, ctypes.c_void_p),
+                                ctypes.c_void_p(ctypes.addressof(c)), 1, 0)
+        if err:
+            raise SystemExit(f"uc_hook_add failed: error {err}")
+
+    def update_deadline(self):
+        """Tell the native hook when Python next has work: the next timer
+        expiry, device event, progress line, pacing check or the budget."""
+        due = [self.next_progress, self.args.max_blocks]
+        if self.next_timer is not None:
+            due.append(self.next_timer)
+        if self.events:
+            due.append(self.events[0][0])
+        if self.next_pace is not None:
+            due.append(self.next_pace)
+        self.clock.deadline = min(due)
 
     def _guard(self, fn, default=None):
         """Wrap a Unicorn callback so a Python error stops the run with its
@@ -388,7 +461,19 @@ class Machine:
         self.set_remap(self.args.start == "bootrom")
         self.uc.mem_map(PSRAM_BASE, PSRAM_SIZE)
         self.uc.mem_map(IRAM_BASE, IRAM_SIZE)
-        for base, size in MMIO_REGIONS:
+        regions = list(MMIO_REGIONS)
+        if self.fast:
+            self.counter_page = ctypes.create_string_buffer(0x1000)
+            self.uc.mem_map_ptr(COUNTER_PAGE, 0x1000, UC_PROT_READ | UC_PROT_WRITE,
+                                ctypes.addressof(self.counter_page))
+            regions = []
+            for base, size in MMIO_REGIONS:
+                if base <= COUNTER_PAGE < base + size:
+                    regions += [(base, COUNTER_PAGE - base),
+                                (COUNTER_PAGE + 0x1000, base + size - COUNTER_PAGE - 0x1000)]
+                else:
+                    regions.append((base, size))
+        for base, size in regions:
             self.uc.mmio_map(base, size, self._guard(self._mmio_read, 0), base,
                              self._guard(self._mmio_write), base)
 
@@ -412,11 +497,13 @@ class Machine:
     def schedule(self, delay_blocks, callback):
         self.events.append((self.nblocks + delay_blocks, callback))
         self.events.sort(key=lambda e: e[0])
+        self.update_deadline()
 
     def run_events(self):
         while self.events and self.events[0][0] <= self.nblocks:
             _, callback = self.events.pop(0)
             callback()
+        self.update_deadline()
 
     def timer_ctl(self, i, value):
         self.timers[i].on_ctl(value)
@@ -426,6 +513,7 @@ class Machine:
         due = [t.expiry_block() for t in self.timers]
         due = [d for d in due if d is not None]
         self.next_timer = min(due) if due else None
+        self.update_deadline()
 
     def run_timers(self):
         for t in self.timers:
@@ -448,6 +536,7 @@ class Machine:
         from another thread."""
         self.inputs.append((action, arg))
         self.input_ready.set()
+        self.clock.deadline = 0     # stop at the next block to take it
 
     def take_inputs(self):
         while self.inputs:
@@ -518,38 +607,39 @@ class Machine:
     def _pc(self):
         return self.uc.reg_read(arm.UC_ARM_REG_PC)
 
-    def _log(self, addr, line):
+    def _tracing(self, addr):
         lo, hi = self.args.trace_addrs
-        if (self.nblocks >= self.args.trace_after and lo <= addr <= hi
-                and self.trace_lines < self.args.trace_limit):
-            self.trace.write(line + "\n")
-            self.trace_lines += 1
+        return (self.trace_lines < self.args.trace_limit and lo <= addr <= hi
+                and self.nblocks >= self.args.trace_after)
+
+    def _log(self, line):
+        self.trace.write(line + "\n")
+        self.trace_lines += 1
 
     def _mmio_read(self, uc, offset, size, base):
         addr = base + offset
-        pc = self._pc()
         handler = READ_HANDLERS.get(addr & ~3)
         word = handler(self) & 0xffffffff if handler else self.regs.get(addr & ~3, 0)
         value = word >> (8 * (addr & 3))
         value &= (1 << (8 * size)) - 1
         st = self.stats[addr]
         st[0] += 1
-        st[2] = st[2] if st[2] is not None else pc
+        if st[2] is None:
+            st[2] = self._pc()
         st[4] = value
-        self._log(addr, f"{self.nblocks:10d} {pc:08x} R{size} {addr:08x} -> {value:08x}")
+        if self._tracing(addr):
+            self._log(f"{self.nblocks:10d} {self._pc():08x} R{size} {addr:08x} -> {value:08x}")
         # a poll only counts while the value stays the same (timers move)
-        key = (pc, addr)
-        count, last = self.polls.get(key, (0, None))
+        count, last = self.polls.get(addr, (0, None))
         count = count + 1 if value == last else 1
-        self.polls[key] = (count, value)
+        self.polls[addr] = (count, value)
         if count == self.args.poll_limit:
-            self.stop(f"polling loop: pc {pc:08x} read {addr:08x} "
+            self.stop(f"polling loop: pc {self._pc():08x} read {addr:08x} "
                       f"{self.args.poll_limit} times (value {value:#x})")
         return value
 
     def _mmio_write(self, uc, offset, size, value, base):
         addr = base + offset
-        pc = self._pc()
         self.polls.clear()  # a poll only counts reads with no writes between
         word = addr & ~3
         shift = 8 * (addr & 3)
@@ -565,9 +655,11 @@ class Machine:
             handler(self, self.regs[word])
         st = self.stats[addr]
         st[1] += 1
-        st[2] = st[2] if st[2] is not None else pc
+        if st[2] is None:
+            st[2] = self._pc()
         st[3] = value
-        self._log(addr, f"{self.nblocks:10d} {pc:08x} W{size} {addr:08x} <- {value:08x}")
+        if self._tracing(addr):
+            self._log(f"{self.nblocks:10d} {self._pc():08x} W{size} {addr:08x} <- {value:08x}")
 
     def _on_block(self, uc, addr, size, _):
         self.nblocks += 1
@@ -602,17 +694,67 @@ class Machine:
         if addr in self.args.breaks and self.nblocks >= self.args.break_after:
             self.stop(f"breakpoint at {addr:08x} (lr {uc.reg_read(arm.UC_ARM_REG_LR):08x})")
         if self.nblocks >= self.next_progress:
-            self.next_progress = self.nblocks + 2_000_000
-            print(f"[block {self.nblocks}] pc {addr:08x}, unique blocks {len(self.coverage)}, "
-                  f"emulated {self.nblocks // BLOCKS_PER_MS} ms, lcd pixels {self.panel.pixels}, "
-                  f"irqs {sum(self.intc.delivered.values())}, timer fires {[t.fires for t in self.timers]}")
-            if self.panel.dirty:
-                self.panel.save_png(self.args.out / "screen.png")
+            self.progress(addr)
         region = self.region_of(addr) if self.args.verbose else self.region
         if region != self.region:
             print(f"[block {self.nblocks}] execution moved {self.region} -> "
                   f"{region} at {addr:08x}")
             self.region = region
+
+    def progress(self, pc):
+        self.next_progress = self.nblocks + PROGRESS_BLOCKS
+        unique = len(self.coverage) if not self.fast else "n/a"
+        print(f"[block {self.nblocks}] pc {pc:08x}, unique blocks {unique}, "
+              f"emulated {self.nblocks // BLOCKS_PER_MS} ms, lcd pixels {self.panel.pixels}, "
+              f"irqs {sum(self.intc.delivered.values())}, timer fires {[t.fires for t in self.timers]}")
+        if self.panel.dirty:
+            self.panel.save_png(self.args.out / "screen.png")
+        self.update_deadline()
+
+    def _on_break(self, uc, addr, size, _):
+        if self.nblocks >= self.args.break_after:
+            self.stop(f"breakpoint at {addr:08x} (lr {uc.reg_read(arm.UC_ARM_REG_LR):08x})")
+
+    def service(self, reason, pc):
+        """Work for the native hook's stops (blockclock.c); returns where to
+        resume."""
+        if reason & STOP_SPIN:
+            self.stop(f"spinning: block {self.clock.last_addr:08x} re-entered itself "
+                      f"{self.clock.spin} times")
+            return pc
+        if self.nblocks >= self.args.max_blocks:
+            self.stop(f"block budget ({self.args.max_blocks}) used up")
+            return pc
+        if self.next_timer is not None and self.nblocks >= self.next_timer:
+            self.run_timers()
+        if self.events and self.nblocks >= self.events[0][0]:
+            self.run_events()
+        if self.inputs:
+            self.take_inputs()
+        if self.nblocks >= self.next_progress:
+            self.progress(pc)
+        if self.realtime and self.next_pace is not None and self.nblocks >= self.next_pace:
+            self.pace()
+        if self.intc.pending() and not self.uc.reg_read(arm.UC_ARM_REG_CPSR) & arm_exc.CPSR_I:
+            self.intc.note_delivery()
+            self.exc.deliver(arm_exc.EXC_IRQ, pc=pc & ~1)
+            pc = self._resume_pc()
+        self.update_deadline()
+        return pc
+
+    def pace(self):
+        """Real-time mode while the guest is busy: hold back when emulated
+        time has run ahead of the wall clock."""
+        if self.wall_start is None:
+            self.wall_start = time.monotonic() - self.nblocks / (1000 * BLOCKS_PER_MS)
+        ahead = (self.nblocks - self.wall_blocks()) / (1000 * BLOCKS_PER_MS)
+        if ahead > 0 and not self.inputs:
+            self.input_ready.wait(min(ahead, 0.05))
+            self.input_ready.clear()
+        self.next_pace = self.nblocks + PACE_BLOCKS
+
+    def _resume_pc(self):
+        return self._pc() | (1 if self.uc.reg_read(arm.UC_ARM_REG_CPSR) & arm_exc.CPSR_T else 0)
 
     def _on_unmapped(self, uc, access, addr, size, value, _):
         kind = {UC_MEM_FETCH_UNMAPPED: "fetch", UC_MEM_WRITE_UNMAPPED: "write"}.get(access, "read")
@@ -648,6 +790,9 @@ class Machine:
         # with executed blocks, so skip ahead to the next device event (which
         # raises the interrupt that would wake the CPU) and carry on.
         pc = 0
+        if self.realtime:
+            self.next_pace = self.nblocks + PACE_BLOCKS
+            self.update_deadline()
         while True:
             try:
                 self.uc.emu_start(pc, 0xffffffff)
@@ -656,7 +801,13 @@ class Machine:
                     self.stop_reason = f"unicorn error: {e}"
             if self.stop_reason is not None:
                 break
-            pc = self._pc() | (1 if self.uc.reg_read(arm.UC_ARM_REG_CPSR) & arm_exc.CPSR_T else 0)
+            pc = self._resume_pc()
+            reason, self.clock.reason = self.clock.reason, 0
+            if reason or self.clock.deadline == 0:
+                pc = self.service(reason, pc)
+                if self.stop_reason is not None:
+                    break
+                continue
             if not self.after_wfi(pc & ~1):
                 self.stop_reason = f"emulation returned at {pc & ~1:08x} for no known reason"
                 break
@@ -702,6 +853,9 @@ class Machine:
         if self.next_timer is not None and self.nblocks >= self.next_timer:
             self.run_timers()
         self.run_events()
+        if self.realtime:
+            self.next_pace = self.nblocks + PACE_BLOCKS
+        self.update_deadline()
         return True
 
     def disasm_at(self, addr, n=6):
@@ -718,7 +872,8 @@ class Machine:
         uc = self.uc
         out = []
         out.append(f"stop: {self.stop_reason}")
-        out.append(f"blocks executed: {self.nblocks}, unique blocks: {len(self.coverage)}")
+        unique = len(self.coverage) if not self.fast else "not tracked (use --slow)"
+        out.append(f"blocks executed: {self.nblocks}, unique blocks: {unique}")
         names = [f"r{i}" for i in range(13)] + ["sp", "lr", "pc", "cpsr"]
         ids = [getattr(arm, f"UC_ARM_REG_R{i}") for i in range(13)] + [
             arm.UC_ARM_REG_SP, arm.UC_ARM_REG_LR, arm.UC_ARM_REG_PC, arm.UC_ARM_REG_CPSR]
@@ -739,7 +894,8 @@ class Machine:
                    f"dacr={arm_exc.cp15(uc, 3):08x}; exceptions delivered: {self.exc.counts}")
         out.append("code at pc:")
         out += self.disasm_at(vals[15])
-        out.append("last blocks: " + " ".join(f"{a:08x}" for a in self.blocks))
+        last = self.blocks if not self.fast else [self.clock.last_addr]
+        out.append("last blocks: " + " ".join(f"{a:08x}" for a in last))
         out.append("")
         out.append(f"peripheral registers touched: {len(self.stats)}")
         out.append("    addr      reads  writes  first_pc  last_write  last_read")
@@ -774,8 +930,9 @@ def parse_args(argv=None, parser=None):
                    help="stop after this many executed blocks (emulated time = blocks / %d per ms)" % BLOCKS_PER_MS)
     p.add_argument("--poll-limit", type=int, default=200_000,
                    help="stop when one pc reads one register this many times")
-    p.add_argument("--trace-limit", type=int, default=200_000,
-                   help="maximum lines in mmio_trace.log")
+    p.add_argument("--trace-limit", type=int, default=None,
+                   help="maximum lines in mmio_trace.log (default: 200000 with --trace-after or "
+                        "--trace-addrs, else no trace)")
     p.add_argument("--trace-after", type=int, default=0, metavar="BLOCK",
                    help="start mmio_trace.log at this block count")
     p.add_argument("--trace-addrs", default="0:0xffffffff", metavar="LO:HI",
@@ -801,6 +958,8 @@ def parse_args(argv=None, parser=None):
     p.add_argument("--rtc-time", type=datetime.datetime.fromisoformat, default=datetime.datetime.now(),
                    metavar="YYYY-MM-DDTHH:MM:SS", help="RTC time at power-on (default: host local time)")
     p.add_argument("--headset", action="store_true", help="start with a headset plugged in")
+    p.add_argument("--slow", action="store_true",
+                   help="per-block Python hook (tracks unique blocks; implied by -v and --trace-blocks)")
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",
                    help="press KEY at emulated time MS for HOLD ms (default 150); keys: "
                         "0-9 * # up down left right select lsoft rsoft call end")
@@ -814,6 +973,8 @@ def parse_args(argv=None, parser=None):
     args.breaks = {int(a, 0) for a in args.breaks.split(",") if a}
     args.adc = {ADC_VBAT: vbat_raw(args.battery_mv), ADC_BATTERY_TEMP: BATTERY_TEMP_RAW,
                 **{int(k, 0): int(v, 0) for k, v in (a.split("=") for a in args.adc)}}
+    if args.trace_limit is None:   # the MMIO trace is on when a filter asks for it
+        args.trace_limit = 200_000 if args.trace_after or args.trace_addrs != "0:0xffffffff" else 0
     args.trace_addrs = tuple(int(x, 0) for x in args.trace_addrs.split(":"))
     args.trace_blocks = tuple(int(x, 0) for x in args.trace_blocks.split(":"))
     args.out.mkdir(exist_ok=True)

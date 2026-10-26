@@ -1,17 +1,20 @@
-# Builds the LZMA helper the emulator loads through ctypes.
+# Builds the native helpers the emulator loads through ctypes.
 ifeq ($(shell uname -s),Darwin)
-LIB = liblzma_sprd.dylib
+EXT = dylib
 else
-LIB = liblzma_sprd.so
+EXT = so
 endif
 CC ?= cc
 
-all: $(LIB)
+all: liblzma_sprd.$(EXT) libblockclock.$(EXT)
 
-$(LIB): lzma_sprd.c third_party/lzmadec.h
+liblzma_sprd.$(EXT): lzma_sprd.c third_party/lzmadec.h
 	$(CC) -O2 -shared -fPIC -Ithird_party -o $@ lzma_sprd.c
 
+libblockclock.$(EXT): blockclock.c
+	$(CC) -O2 -shared -fPIC -o $@ blockclock.c
+
 clean:
-	rm -f liblzma_sprd.dylib liblzma_sprd.so
+	rm -f liblzma_sprd.dylib liblzma_sprd.so libblockclock.dylib libblockclock.so
 
 .PHONY: all clean

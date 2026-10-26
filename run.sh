@@ -6,5 +6,5 @@ if [ ! -x .venv/bin/python ]; then
     echo "first-time setup: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
     exit 1
 fi
-[ -f liblzma_sprd.dylib ] || [ -f liblzma_sprd.so ] || make || exit 1
+make -s || exit 1
 exec .venv/bin/python -I live.py "$@"

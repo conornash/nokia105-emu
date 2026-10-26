@@ -44,6 +44,7 @@ class Intc:
             self.raw[bank] |= 1 << bit
         else:
             self.raw[bank] &= ~(1 << bit)
+        self.m.clock.irq_pending = self.pending()
 
     def read(self, bank, off):
         if off == IRQ_STS:
@@ -57,6 +58,7 @@ class Intc:
             self.en[bank] |= value
         elif off == IRQ_DIS:
             self.en[bank] &= ~value
+        self.m.clock.irq_pending = self.pending()
 
     def note_delivery(self):
         for bank in (0, 1):

@@ -7,6 +7,8 @@ out_*/
 # build products and environments
 liblzma_sprd.dylib
 liblzma_sprd.so
+libblockclock.dylib
+libblockclock.so
 .venv/
 __pycache__/
 *.pyc
