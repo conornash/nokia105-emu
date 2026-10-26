@@ -30,7 +30,8 @@ Works:
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
 - A live window that runs at the phone's real speed: home screen about
-  7.5 s after launch, menus open instantly.
+  7.5 s after launch, menus open instantly. It shows the screen in a
+  drawing of the phone whose keys you can click.
 - Headless runs several times faster than real time (boot to the home
   screen in under 2 s).
 
@@ -62,6 +63,8 @@ The phone takes about 7.5 s to reach the home screen, as on real hardware.
 
 ### Controls
 
+Click the keys on the phone in the window, or use the keyboard:
+
 | Key | Phone |
 |---|---|
 | Arrow keys | navigation |
@@ -83,7 +86,8 @@ same options and saves every new screen to `out/frames/`.
 | `--dump DIR` | directory with `flash.bin` and `bootrom.bin` (default `$NOKIA_DUMP`, `./dump` or `../dump`) |
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
 | `--headset` | boot with a headset plugged in |
-| `--scale N` | window pixels per LCD pixel (`live.py`, default 3) |
+| `--scale N` | window pixels per LCD pixel (`live.py`; default: the largest up to 3 that fits the screen, in steps of 0.25) |
+| `--no-skin` | show only the screen, without the phone around it (`live.py`) |
 | `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down` |
 | `--max-blocks N` | stop after N translation blocks (4000 blocks = 1 ms) |
 | `--battery-mv MV`, `--no-battery`, `--adc CH=RAW` | power-supply readings |
@@ -132,6 +136,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `emu.py` | machine: memory map, register file, scheduler, CLI |
 | `blockclock.c` | native block hook: the emulated clock |
 | `live.py`, `run.sh` | live window |
+| `skin.py` | the phone drawn around the screen, and where its keys are |
 | `arm_exc.py` | exception entry and page-table walks |
 | `irq.py` | interrupt controller and timers |
 | `sfc.py`, `lzma_engine.py`, `lzma_sprd.c` | SPI flash, LZMA engine |
