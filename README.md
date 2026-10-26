@@ -3,7 +3,8 @@
 An emulator for the **Nokia 105 (2022, TA-1423)**, a Series 30+ feature
 phone built on the UNISOC **SC6531E** (ARM926EJ-S). It boots an unmodified
 dump of the phone's flash from the boot ROM onward, through the ThreadX
-kernel to the home screen, and the menus can be driven from your keyboard.
+kernel to the home screen, and the menus can be driven by clicking the keys
+of the phone drawn around the screen, or from your keyboard.
 
 ![Boot logo, home screen, main menu, Messages and the Snake menu](docs/screenshots/banner.png)
 
@@ -60,6 +61,8 @@ mkdir dump                    # put flash.bin and bootrom.bin here
 ```
 
 The phone takes about 7.5 s to reach the home screen, as on real hardware.
+
+<p align="center"><img src="docs/screenshots/window.png" alt="The live window: the home screen inside a drawing of the phone" width="232"></p>
 
 ### Controls
 
@@ -163,7 +166,8 @@ This project contains no firmware or code from Nokia, HMD Global or UNISOC.
 It was written by observing how the phone's firmware uses its hardware.
 Nokia is a trademark of Nokia Corporation; this project is not affiliated
 with or endorsed by Nokia, HMD Global or UNISOC. Screenshots show the
-phone's own interface, running in the emulator. Only use firmware you
+phone's own interface, running in the emulator; the phone around the
+screen in the live window is drawn by `skin.py`. Only use firmware you
 dumped from a phone you own.
 
 ## License
