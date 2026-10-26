@@ -1,0 +1,13 @@
+# firmware dumps are copyrighted and device-specific: never commit them
+dump/
+*.bin
+# emulator run output
+out/
+out_*/
+# build products and environments
+liblzma_sprd.dylib
+liblzma_sprd.so
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

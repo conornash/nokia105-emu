@@ -1,0 +1,25 @@
+diff --git a/spd_dump.c b/spd_dump.c
+index f8ba370..5902366 100644
+--- a/spd_dump.c
++++ b/spd_dump.c
+@@ -1267,11 +1267,16 @@ int main(int argc, char **argv) {
+ 				/* Bootloader (chk = crc16) */
+ 				io->flags |= FLAGS_CRC16;
+ 
+-				encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
+-				send_msg(io);
+-				ret = recv_msg(io);
++				// the first check baud can be lost right after enumeration
++				for (i = 0; i < 10; i++) {
++					encode_msg(io, BSL_CMD_CHECK_BAUD, NULL, 1);
++					send_msg(io);
++					ret = recv_msg(io);
++					if (ret) break;
++					DBG_LOG("no reply to check baud, retrying\n");
++				}
+ 				if (recv_type(io) != BSL_REP_VER)
+-					ERR_EXIT("ver expected\n");
++					ERR_EXIT("ver expected (got 0x%04x)\n", recv_type(io));
+ 
+ 				DBG_LOG("BSL_REP_VER: ");
+ 				print_string(stderr, io->raw_buf + 4, READ16_BE(io->raw_buf + 2));

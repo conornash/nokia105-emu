@@ -1,0 +1,144 @@
+# SC6531E hardware notes
+
+What the emulator models, as worked out from the Nokia 105 TA-1423
+firmware (`MOCOR_20C_6531E_W23.19.4`). Addresses in the firmware are
+written as `flash 0x…` (raw flash image), `kern 0x…` (kernel, decompressed
+at 0x04000000) and `user 0x…` (MMI code, demand-paged at 0x08000000). The
+module docstrings and code comments cite the firmware code behind each
+register; this page is the overview. Register layouts marked *inferred*
+were deduced from how the firmware uses them, not from documentation.
+
+## CPU and memory
+
+ARM926EJ-S (ARMv5TE) running ThreadX-based MOCOR. Unicorn emulates the
+core; `arm_exc.py` delivers exceptions itself, because Unicorn neither
+vectors to the guest's handlers nor sets DFAR/DFSR on this core.
+
+| Address | Size | What |
+|---|---|---|
+| `0x00000000` | 0x16000 | boot ROM until the remap, then a flash alias |
+| `0x04000000` | 4 MB | PSRAM: kernel, heap, framebuffers |
+| `0x08000000` | | MMI code and resources, demand-paged from flash |
+| `0x10000000` | 4 MB | memory-mapped SPI NOR flash |
+| `0x40000000` | 64 KB | internal SRAM |
+
+`0x205000e0`: bit 0 = boot ROM at address 0 (cleared by the boot ROM's
+last act), bit 1 must be set for a normal boot (else download mode).
+
+Demand paging: 0x08000000 is mapped lazily. Each 4 KB chunk of the MMI
+image is a separate stream in Spreadtrum's LZMA variant, and the abort
+handler has the hardware LZMA engine decode the 1 KB slice holding the
+faulting address (the engine's windowed mode).
+
+## Peripherals
+
+| Block | Address | IRQ | Module |
+|---|---|---|---|
+| Interrupt controller (2 banks) | `0x80000000`, `0x80001000` | | `irq.py` |
+| Timers (32 kHz / 26 MHz) | `0x81000000`, `0x81001000` | 4, 5, 6 | `irq.py` |
+| System counter (ms at `+0x300c`) | `0x81003000` | | `emu.py` |
+| SPI flash controller | `0x20a00000` | | `sfc.py` |
+| LZMA decompressor | `0x20e00000` | | `lzma_engine.py` |
+| JPEG decoder + colour converter | `0x20200000`, `0x20210000` | 38 | `jpeg_hw.py` |
+| LCD controller | `0x20d00000` | 22 | `lcd.py` |
+| SPI1 (LCD panel bus) | `0x69000000` | | `lcd.py` |
+| Keypad | `0x87000000` | 12 | `keypad.py` |
+| Digital EIC (debounced inputs) | `0x8a001000` | 11 | `eic.py` |
+| ADI bus to the PMIC | `0x82000000` | | `emu.py` |
+| PMIC (SC1161): RTC, EIC, ADC | `0x82001000` (via ADI) | 36 | `pmic.py`, `emu.py` |
+| DSP shared memory / mailbox | `0x30000000` | 21 | `dsp.py` |
+
+Interrupt controller banks: `+0x00` masked status, `+0x04` raw, `+0x08`
+enable (write 1 to set), `+0x0c` disable, `+0x2c` FIQ disable (*inferred*:
+the firmware writes it just before enabling a line). IRQ n is
+bank n / 32, bit n % 32. The kernel's handler table (RAM `0x42f90f0`) has
+24-byte records: id, bank, bit mask, handler, deferred handler, default.
+PMIC interrupts arrive on line 36 and are split by the source bits in
+`0x82001020` into virtual lines 66 (RTC) and 69 (EIC).
+
+### PMIC (through the ADI bus)
+
+Reads go through the ADI: write the register offset to `0x82000008`, read
+`0x8200000c` (offset << 16 | value).
+
+- Chip id `0x82001400`/`04` = `0xa000`/`0x1161`.
+- ADC `0x82001300`: channel register `+0x04` (channel | `0x20` scale | `0x40`),
+  result `+0x4c`, done `+0x5c` bit 0. Register value `0x62` is the battery
+  voltage (mV = 690 + 1.25 × raw, must be ≥ 3380 to boot); `0x60` is a
+  periodic check (flash `0x1b636`) whose converted value must stay in
+  985..1058, else the phone shows a warning and powers off after 3 s. It
+  is probably the battery temperature (*inferred*).
+- RTC: counters `0x82001180`..`8c` (seconds, minutes, hours, days since
+  2000-01-01), set registers `0x82001190`..`9c`, interrupt enable `0xb0`,
+  status `0xb4` (bit 1 = minute tick, bits 8-11 = set done), clear `0xb8`.
+  The high byte of spare register `0x820011d0` must be `0xbb` or boot
+  resets the clock to 2023-01-01 (flash `0x1727c`).
+- EIC `0x82001200`: data `+0x00`, polarity `+0x14`, enable `+0x18`, raw
+  `+0x1c`, masked `+0x20`. Inputs: bit 1 = power key (pressed = 1), bit 8 =
+  battery present.
+
+### Digital EIC (`0x8a001000`)
+
+Same layout as the PMIC EIC, plus `+0x04` data mask, `+0x24` clear and
+`+0x28` re-arm. Input 1 is headset detect, active low (low = plugged in).
+The kernel's input table (RAM `0x430a060`, 16 bytes per logical input:
+id, type, active level, line, callback) maps logical inputs to EIC lines;
+the line numbering is the controller list at flash `0x2d108`
+(`0x8a001000` lines 0-15, PMIC EIC 16-31, then three 8-line groups).
+
+### Keypad (`0x87000000`)
+
+`+0x08` raw interrupt: bits 0-3 key down in slot 0-3, bits 4-7 key up;
+`+0x10` clear; `+0x2c` key status, one byte per slot: bits 0-2 =
+keymap index / 5, bits 4-6 = index % 5. The keymap is 40 key codes,
+`*` 6 9 # · 2 5 8 0 · 1 4 7 3 · call lsoft left up · select down right
+rsoft. The red key is the power key on the PMIC EIC.
+
+### Display
+
+The panel is an ST7735-style controller on SPI1 (`0x69000000`, register
+layout from fpdoom). The LCD controller (`0x20d00000`) composes an image
+layer and three OSD layers and streams the result to SPI1. The MMI draws
+in software into an RGB565 framebuffer (`0x0415fb00`) shown through OSD
+layer 1, and refreshes partial windows.
+
+LCDC raw interrupt (`+0x11c`) bit 0 = refresh done, bit 1 = the panel's
+tearing-effect signal: before each refresh the driver polls bit 1 for up
+to 2 s (kern `0x40220ec`), so the emulator always reports it.
+
+### JPEG decoder (`0x20200000` / `0x20210000`)
+
+The firmware parses JPEG headers itself and programs the hardware with
+quantisation tables (`+0x300`, bit-reversed order), Huffman symbols
+(`0x20202000`), image size (`+0x0c`), output buffers (`+0x40`..`+0x4c`)
+and the entropy-coded scan (`+0x50`). Writing bit 31 of `0x20210400`
+starts the decode; output comes in bands of rows through
+`0x20211808`..`18`, with a one-hot output-pair select. The emulator
+rebuilds a baseline JPEG from that state and decodes it with Pillow.
+
+The same block then converts the YCbCr result to RGB565, cropping and
+scaling (`ctrl` bit 1, source rectangle `+0x134`/`+0x138`, output size
+`+0x10`, output address `+0x50`, start `+0x64`), and signals completion
+with interrupt bit 4 on line 38. If that interrupt never comes, the MMI
+waits 3 s and converts in software.
+
+### DSP
+
+The DSP (GSM baseband) shares memory at `0x30000000`; the ARM writes
+commands at `0x30000000` and the DSP acknowledges in `0x30000002`. The
+emulator only acknowledges and raises the "booted" interrupt (line 21), so
+there is no radio.
+
+## Boot requirements
+
+A normal boot powers off unless:
+
+1. the power key is held until a check about 1.3 s after reset
+   (`--power-key-ms`, default 3000),
+2. battery detect (PMIC EIC bit 8) is high,
+3. the battery voltage reads ≥ 3380 mV,
+4. the periodic ADC check reads inside its window.
+
+Useful breakpoints when the phone shuts down: user `0x080034b8` (message
+then 3 s power-off timer), kernel `0x0400425e` (power down), flash
+`0x10e0a` (final loop).
