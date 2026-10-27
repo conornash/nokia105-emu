@@ -47,6 +47,8 @@ faulting address (the engine's windowed mode).
 | ADI bus to the PMIC | `0x82000000` | | `emu.py` |
 | PMIC (SC1161): RTC, EIC, ADC | `0x82001000` (via ADI) | 36 | `pmic.py`, `emu.py` |
 | DSP shared memory / mailbox | `0x30000000` | 21 | `dsp.py` |
+| DMA controller | `0x20100000` | 31 | `audio.py` |
+| Voice-band codec (DAC FIFOs) | `0x82003000` | | `audio.py` |
 
 Interrupt controller banks: `+0x00` masked status, `+0x04` raw, `+0x08`
 enable (write 1 to set), `+0x0c` disable, `+0x2c` FIQ disable (*inferred*:
@@ -121,6 +123,25 @@ scaling (`ctrl` bit 1, source rectangle `+0x134`/`+0x138`, output size
 `+0x10`, output address `+0x50`, start `+0x64`), and signals completion
 with interrupt bit 4 on line 38. If that interrupt never comes, the MMI
 waits 3 s and converts in software.
+
+### Sound
+
+The MMI synthesises ringtones on the ARM (thread `T_MIDI`, 22050 Hz) into a
+FIFO; a mixer (user `0x822bf20`) and the kernel's audio HAL (descriptor
+`AUDIO_HAL` at RAM `0x4390f80`) turn that into 48 kHz stereo in a ring
+buffer, and DMA channels 4 and 5 copy 320-sample blocks from the ring to the
+voice-band codec's DAC FIFOs at `0x82003000` (left) and `0x82003004`
+(right). The DMA controller's channels sit at `0x20101000 + 0x40 * n`
+(Linux sprd-dma layout); the hardware clears a channel's enable bit when a
+block is done, and IRQ 31 reports it.
+
+Before any of this runs, an audio power state machine (kern `0x40670fa`,
+handler table at `0x40a59d8`) powers the codec up. Its calibration step
+(kern `0x402b476`) writes `0x6006` then `0xe006` to the codec register
+`0x820013d4` and waits for bits 12 and 10; without them the ARM data path
+(bit 12 of the HAL flags) is never enabled and the DMA plays its silence
+buffer (`0x4390d00`). The mixer drops the samples when the active profile
+mutes ringtones (Silent).
 
 ### DSP
 

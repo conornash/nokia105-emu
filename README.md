@@ -12,7 +12,8 @@ The CPU is emulated with [Unicorn](https://www.unicorn-engine.org/); the
 chip's peripherals are reimplemented in Python from what the firmware
 expects of them: interrupt controller, timers, SPI flash, hardware LZMA,
 LCD controller and panel, the JPEG decoder and colour converter, keypad,
-the PMIC (RTC, ADC, external interrupts) and enough of the DSP mailbox to
+the PMIC (RTC, ADC, external interrupts, audio codec), the DMA controller
+and voice-band codec that play sound, and enough of the DSP mailbox to
 get past start-up.
 
 **No firmware is included.** You need to dump your own phone; see
@@ -30,6 +31,11 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
+- Sound from the phone's own MIDI synthesiser: ringtones, alerts and
+  previews play through the speakers (via `ffplay`) and are saved to
+  `out/audio.wav`. If your phone was dumped in the Silent profile, as the
+  TA-1423 used here was, ringtones stay muted until you switch to General
+  (Menu → Settings → Profiles → General → Activate).
 - A live window that runs at the phone's real speed: home screen about
   7.5 s after launch, menus open instantly. It shows the screen in a
   drawing of the phone whose keys you can click.
@@ -38,15 +44,18 @@ Works:
 
 Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
-- No sound, no camera, no USB, no file system writes persisting between
-  runs.
+- Sounds made by the DSP (keypad tones, call audio) and FM radio are
+  silent.
+- No camera, no USB, and settings changes (such as the profile) don't
+  persist between runs.
 - Only tested with firmware `MOCOR_20C_6531E_W23.19.4` from a TA-1423.
   Other SC6531E phones will need changes.
 
 ## Quick start
 
 Requirements: Python 3 with Tk for the live window (Homebrew:
-`brew install python-tk`), and a C compiler. Developed and tested on macOS
+`brew install python-tk`), a C compiler, and `ffplay` from ffmpeg for sound
+(`brew install ffmpeg`; without it sound only goes to `out/audio.wav`). Developed and tested on macOS
 with Python 3.14; Linux should work, since the Makefile builds a `.so`
 there, but hasn't been tested.
 
@@ -89,6 +98,7 @@ same options and saves every new screen to `out/frames/`.
 | `--dump DIR` | directory with `flash.bin` and `bootrom.bin` (default `$NOKIA_DUMP`, `./dump` or `../dump`) |
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
 | `--headset` | boot with a headset plugged in |
+| `--mute` | don't play sound in the live window (still saved to `out/audio.wav`) |
 | `--scale N` | window pixels per LCD pixel (`live.py`; default: the largest up to 3 that fits the screen, in steps of 0.25) |
 | `--no-skin` | show only the screen, without the phone around it (`live.py`) |
 | `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down` |
@@ -146,6 +156,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `lcd.py` | LCD controller, SPI1, panel |
 | `jpeg_hw.py` | JPEG decoder and colour converter |
 | `keypad.py`, `eic.py`, `pmic.py` | keypad, digital EIC, PMIC (RTC, EIC) |
+| `audio.py` | DMA controller and voice-band codec: sound output |
 | `dsp.py` | DSP mailbox stub |
 | `disasm.py`, `mkelf.py` | helpers: disassemble a range; wrap a raw image as an ELF for Ghidra |
 | `third_party/lzmadec.h` | LZMA decoder from spreadtrum_flash (public domain) |

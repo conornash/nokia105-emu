@@ -9,6 +9,8 @@ usage: .venv/bin/python -I live.py [--scale N] [--no-skin] [emu.py options]
 Keys: arrows = navigate, Enter/space = select, [ and ] (or F1/F2) = left
 and right soft keys, Backspace = right soft key, c = call (green),
 Escape = end/power (red), 0-9 * # = keypad, h = plug/unplug a headset.
+
+Sound plays through ffplay (from ffmpeg) and is also saved to out/audio.wav.
 """
 import argparse
 import math
@@ -173,12 +175,14 @@ def main():
                    help="window pixels per LCD pixel (default: the largest up to 3 that fits the screen)")
     p.add_argument("--no-skin", dest="skin", action="store_false",
                    help="show only the screen, without the phone around it")
+    p.add_argument("--mute", action="store_true", help="don't play sound (it is still saved to out/audio.wav)")
     args = emu.parse_args(parser=p)
     # a live session has no block budget
     if "--max-blocks" not in sys.argv:
         args.max_blocks = 1 << 62
     machine = emu.Machine(args)
     machine.realtime = True
+    machine.vbc.live = not args.mute
     Window(machine, args.scale, args.skin).run()
 
 

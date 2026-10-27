@@ -31,6 +31,7 @@ from unicorn.unicorn_py3.unicorn import uc_hook_h, uclib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import arm_exc  # noqa: E402
+import audio  # noqa: E402
 import dsp  # noqa: E402
 import eic  # noqa: E402
 import irq  # noqa: E402
@@ -156,6 +157,11 @@ ANA_READ_HANDLERS = {
     0x82001090: lambda m: clk32k_cal_ticks(m) >> 16,
     # 0x17d56 writes 1 and waits for bit 0 to self-clear (busy)
     0x82001094: lambda m: m.regs.get(0x82001094, 0) & ~1,
+    # audio codec (0x82001380..): the power-on sequence (kern 0x402b476)
+    # writes 0x6006 then 0xe006 to +0x54 and sleeps 10 ms at a time until
+    # bits 12 and 10 are set (taken as calibration done); started by bit 15
+    0x820013d4: lambda m: m.regs.get(0x820013d4, 0) | (
+        1 << 12 | 1 << 10 if m.regs.get(0x820013d4, 0) & 1 << 15 else 0),
     # ADC on the PMIC (flash 0x17a64 adc_read): channel in 0x82001304 bits 0-4
     # (scale in bits 5-6), done flag 0x8200135c bit 0, 12-bit result in
     # 0x8200134c. Conversions finish instantly; see adc_result.
@@ -228,6 +234,7 @@ READ_HANDLERS = {
     eic.EIC_BASE + eic.DATA: lambda m: m.eic.level(),
     eic.EIC_BASE + eic.RIS: lambda m: m.eic.raw(),
     eic.EIC_BASE + eic.MIS: lambda m: m.eic.masked(),
+    audio.DMA_INT_STS: lambda m: m.dma.read_status(),
 }
 
 EIC_POWER_KEY = 1 << 1
@@ -289,6 +296,7 @@ WRITE_HANDLERS = {
     eic.EIC_BASE + eic.IEV: lambda m, v: m.eic.update(),
     eic.EIC_BASE + eic.IE: lambda m, v: m.eic.update(),
     eic.EIC_BASE + eic.IC: lambda m, v: m.eic.on_clr(v),
+    **{a: (lambda m, v, ch=ch: m.vbc.on_fifo_write(ch, v)) for ch, a in enumerate(audio.VBC_DA)},
 }
 
 ARM_EXCEPTIONS = {1: "undefined instruction", 2: "SWI", 3: "prefetch abort",
@@ -300,6 +308,12 @@ for _bank, _base in enumerate(irq.INTC_BANKS):
         READ_HANDLERS[_base + _off] = lambda m, b=_bank, o=_off: m.intc.read(b, o)
     for _off in (irq.IRQ_EN, irq.IRQ_DIS):
         WRITE_HANDLERS[_base + _off] = lambda m, v, b=_bank, o=_off: m.intc.write(b, o, v)
+for _ch in range(audio.CHANNELS):
+    _base = audio.CH_BASE + audio.CH_STRIDE * _ch
+    READ_HANDLERS[_base + audio.PAUSE] = lambda m, ch=_ch: m.dma.read_pause(ch)
+    READ_HANDLERS[_base + audio.INTC] = lambda m, ch=_ch: m.dma.read_intc(ch)
+    WRITE_HANDLERS[_base + audio.CFG] = lambda m, v, ch=_ch: m.dma.on_cfg(ch, v)
+    WRITE_HANDLERS[_base + audio.INTC] = lambda m, v, ch=_ch: m.dma.on_intc(ch, v)
 for _i, _base in enumerate(irq.TIMER_BASES):
     READ_HANDLERS[_base + irq.VALUE] = lambda m, i=_i: m.timers[i].value()
     READ_HANDLERS[_base + irq.INT] = lambda m, i=_i: m.timers[i].read_int()
@@ -352,6 +366,8 @@ class Machine:
         # the power key is let go after --power-key-ms: the EIC sees the change
         self.schedule(args.power_key_ms * BLOCKS_PER_MS, self.pmic.update)
         self.eic = eic.DigitalEic(self, args.headset)
+        self.vbc = audio.Vbc(self, args.out / "audio.wav")
+        self.dma = audio.Dma(self, self.vbc)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         for at_ms, name, hold_ms in args.keys:
@@ -820,6 +836,7 @@ class Machine:
         self.errors.close()
         self.lcd_log.close()
         self.g2d_log.close()
+        self.vbc.close()
         self.panel.save_png(self.args.out / "screen.png")
         self.report()
 
@@ -889,7 +906,8 @@ class Machine:
                    f"delivered {self.intc.delivered}; timer fires {[t.fires for t in self.timers]}; "
                    f"dsp interrupts {self.dsp.interrupts}; rtc events {self.pmic.rtc_events}; "
                    f"wfi sleeps {self.wfi_count} ({self.wfi_blocks // BLOCKS_PER_MS} ms skipped); "
-                   f"key presses {self.keypad.presses}")
+                   f"key presses {self.keypad.presses}; audio: {self.dma.blocks} DMA blocks, "
+                   f"{self.vbc.samples} samples")
         out.append(f"mmu: sctlr={arm_exc.cp15(uc, 1):08x} ttbr={arm_exc.cp15(uc, 2):08x} "
                    f"dacr={arm_exc.cp15(uc, 3):08x}; exceptions delivered: {self.exc.counts}")
         out.append("code at pc:")
