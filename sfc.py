@@ -36,13 +36,14 @@ UNIQUE_ID = bytes.fromhex("d1a2b3c4d5e6f708")  # made up; the real chip's is unk
 class SpiFlash:
     """Winbond W25Q32-style NOR flash; buf is a byte memoryview of the mapped image."""
 
-    def __init__(self, buf, size, jedec_id=0xef4016, log=None):
+    def __init__(self, buf, size, jedec_id=0xef4016, log=None, on_change=None):
         self.buf = buf
         self.size = size
         self.jedec_id = jedec_id
         self.status = [0, 0, 0]
         self.wel = False
         self.log = log or (lambda line: None)
+        self.on_change = on_change or (lambda: None)   # after a program or erase
 
     def _addr(self, tx):
         return int.from_bytes(tx[1:4], "big") % self.size if len(tx) >= 4 else 0
@@ -78,6 +79,7 @@ class SpiFlash:
                     a = page | ((addr + i) & 0xff)
                     self.buf[a] &= b
                 self.log(f"flash program {addr:06x} +{len(data)}")
+                self.on_change()
             self.wel = False
         elif cmd in ERASE_SIZES:
             size = ERASE_SIZES[cmd]
@@ -85,11 +87,13 @@ class SpiFlash:
             if self.wel:
                 self.buf[addr:addr + size] = b"\xff" * size
                 self.log(f"flash erase {addr:06x} +{size:#x}")
+                self.on_change()
             self.wel = False
         elif cmd in (0xc7, 0x60):
             if self.wel:
                 self.buf[0:self.size] = b"\xff" * self.size
                 self.log("flash chip erase")
+                self.on_change()
             self.wel = False
         elif cmd == 0x4b:
             out = UNIQUE_ID

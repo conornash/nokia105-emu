@@ -73,6 +73,7 @@ STOP_DEADLINE, STOP_IRQ, STOP_SPIN = 1, 2, 4
 COUNTER_PAGE = 0x81003000
 PROGRESS_BLOCKS = 2_000_000
 PACE_BLOCKS = 10 * 4000   # real-time mode: check the wall clock every 10 ms
+AUTOSAVE_MS = 2000        # --state: save this long after the flash was last written
 
 BOOTROM_SIZE = 0x16000
 FLASH_BASE = 0x10000000   # memory-mapped SPI flash (custom FDL: FW_ADDR)
@@ -356,7 +357,8 @@ class Machine:
         self.flash_log = open(args.out / "flash.log", "w")
         self.sfc = sfc.Sfc(self, sfc.SpiFlash(
             memoryview(self.flash).cast("B"), self.flash_size,
-            log=lambda line: self.flash_log.write(f"{self.nblocks:10d} {line}\n")))
+            log=lambda line: self.flash_log.write(f"{self.nblocks:10d} {line}\n"),
+            on_change=self.on_flash_change))
         self.lzma = lzma_engine.LzmaEngine(self)
         self.blocks_per_ms = BLOCKS_PER_MS
         self.intc = irq.Intc(self)
@@ -488,13 +490,27 @@ class Machine:
             print(f"flash: {state} was saved from a different dump, starting from the dump")
         return dump
 
+    def on_flash_change(self):
+        self.flash_changed_at = self.nblocks
+
+    def autosave(self):
+        """With --state, save once the firmware has left the flash alone for
+        AUTOSAVE_MS (it writes a settings change at once, in a burst of
+        programs and erases), so a crash or force-quit loses at most that."""
+        if (self.args.state and self.flash_changed_at is not None
+                and self.nblocks - self.flash_changed_at >= AUTOSAVE_MS * BLOCKS_PER_MS):
+            self.flash_changed_at = None
+            self.save_state()
+
     def save_state(self):
-        """Write the flash back to --state if the firmware changed it (its
-        settings, contacts and messages live in flash)."""
+        """Write the flash back to --state if the firmware changed it since
+        the last save (its settings, contacts and messages live in flash)."""
         state = self.args.state
         data = bytes(self.flash)[:self.flash_size]
-        if not state or hashlib.sha256(data).digest() == self.loaded_hash:
+        digest = hashlib.sha256(data).digest()
+        if not state or digest == self.saved_hash:
             return
+        self.saved_hash = digest
         state.parent.mkdir(parents=True, exist_ok=True)
         tmp = state.with_name(state.name + ".tmp")
         tmp.write_bytes(data)
@@ -505,7 +521,8 @@ class Machine:
     def _map_memory(self):
         self.flash, self.flash_size = self._map_file(
             FLASH_BASE, self._flash_source(), perms=UC_PROT_READ | UC_PROT_EXEC)
-        self.loaded_hash = hashlib.sha256(bytes(self.flash)[:self.flash_size]).digest()
+        self.saved_hash = hashlib.sha256(bytes(self.flash)[:self.flash_size]).digest()
+        self.flash_changed_at = None    # block count of the latest unsaved flash write
         self.bootrom = ctypes.create_string_buffer(
             (self.args.dump / "bootrom.bin").read_bytes(), BOOTROM_SIZE)
         self.rom_at_zero = None
@@ -913,6 +930,7 @@ class Machine:
         if self.next_timer is not None and self.nblocks >= self.next_timer:
             self.run_timers()
         self.run_events()
+        self.autosave()
         if self.realtime:
             self.next_pace = self.nblocks + PACE_BLOCKS
         self.update_deadline()

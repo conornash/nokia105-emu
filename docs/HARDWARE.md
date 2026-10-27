@@ -157,10 +157,11 @@ mutes ringtones (Silent). Keypad tones take the same path.
 
 The firmware keeps its settings, contacts and messages in the NV area of
 the flash (around `0x398000`-`0x3c0000`), written through the SPI flash
-controller. The flash model applies those writes to its in-memory image;
-`--state FILE` saves that image at the end of a run and boots from it
-next time, with `FILE.source` holding the SHA-256 of the dump it came
-from.
+controller, as soon as a setting changes (a burst of programs and erases
+within a few milliseconds). The flash model applies those writes to its
+in-memory image; `--state FILE` saves that image 2 s after the firmware
+last wrote it, and again at the end of a run, and boots from it next time,
+with `FILE.source` holding the SHA-256 of the dump it came from.
 
 ### DSP
 

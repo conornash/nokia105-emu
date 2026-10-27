@@ -11,11 +11,13 @@ and right soft keys, Backspace = right soft key, c = call (green),
 Escape = end/power (red), 0-9 * # = keypad, h = plug/unplug a headset.
 
 Sound plays through ffplay (from ffmpeg) and is also saved to out/audio.wav.
-Settings changed on the phone are kept in state/flash.bin between sessions
-(--fresh starts again from the dump).
+Settings changed on the phone are kept in state/flash.bin between sessions:
+saved 2 s after each change and when the window closes (close button,
+Cmd+Q or Ctrl+C). --fresh starts again from the dump.
 """
 import argparse
 import math
+import signal
 import sys
 import threading
 import tkinter as tk
@@ -89,7 +91,12 @@ class Window:
         self.shown = None
         self.root.bind("<KeyPress>", self.on_press)
         self.root.bind("<KeyRelease>", self.on_release)
+        # quitting by any route goes through close(), which saves the phone
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.createcommand("tk::mac::Quit", self.close)      # Cmd+Q on macOS
+        for sig in (signal.SIGINT, signal.SIGTERM):                # Ctrl+C, kill
+            signal.signal(sig, lambda *_: self.root.after(0, self.close))
+        self.closing = False
         self.thread = threading.Thread(target=machine.run, daemon=True)
 
     def on_press(self, event):
@@ -160,6 +167,9 @@ class Window:
             self.root.after(40, self.refresh)
 
     def close(self):
+        if self.closing:
+            return
+        self.closing = True
         self.m.stop("window closed")
         self.m.input_ready.set()
         self.thread.join(timeout=10)

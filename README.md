@@ -37,9 +37,12 @@ Works:
   TA-1423 used here was, stays quiet until you switch to General (Menu →
   Settings → Profiles → General → Activate), and keypad tones play only if
   their level (Settings → Tone settings → Keypad tones) is above zero.
-- The phone keeps its settings: the live window saves the flash to
-  `state/flash.bin` when it closes and boots from it next time, so a
-  profile or tone change only has to be made once.
+- The phone keeps its settings (profile, ringtone, keypad and ringing
+  volume, alarms, contacts, messages): the live window keeps the phone's
+  flash in `state/flash.bin` and boots from it next time. It saves a couple
+  of seconds after each change and again when the window closes, whether by
+  the close button, Cmd+Q or Ctrl+C in the terminal, so even a crash loses
+  at most the last change.
 - A live window that runs at the phone's real speed: home screen about
   7.5 s after launch, menus open instantly. It shows the screen in a
   drawing of the phone whose keys you can click.
