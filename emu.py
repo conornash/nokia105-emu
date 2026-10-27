@@ -398,7 +398,8 @@ class Machine:
         self.lcdc = lcd.Lcdc(self, self.spi1, args.out / "frames")
         self.exc_log = open(args.out / "exceptions.log", "w")
         self.exc = arm_exc.ExceptionEntry(self.uc, log=print)
-        self.exc_repeats = collections.Counter()
+        # the latest exception and how many times in a row it has repeated
+        self.last_exc, self.exc_repeats = None, 0
         if self.fast:
             self._install_clock()
             for addr in args.breaks:
@@ -823,9 +824,16 @@ class Machine:
             self.stop(f"CPU exception {intno} ({ARM_EXCEPTIONS.get(intno, '?')}) at {pc:08x}")
             return
         self.exc_log.write(f"{self.nblocks:10d} {what}\n")
-        self.exc_repeats[(intno, pc)] += 1
-        if intno != arm_exc.EXC_SWI and self.exc_repeats[(intno, pc)] == 1000:
-            self.stop(f"exception storm: {what} repeated 1000 times")
+        # A storm is the same exception back to back with nothing in between.
+        # The same abort recurring over a session is normal: demand-paged
+        # code and resources get evicted and faulted in again.
+        if intno == arm_exc.EXC_SWI:
+            return
+        key = (intno, what)
+        self.exc_repeats = self.exc_repeats + 1 if key == self.last_exc else 1
+        self.last_exc = key
+        if self.exc_repeats == 1000:
+            self.stop(f"exception storm: {what} repeated 1000 times in a row")
 
     def stop(self, reason):
         if self.stop_reason is None:
