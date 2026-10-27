@@ -11,6 +11,8 @@ and right soft keys, Backspace = right soft key, c = call (green),
 Escape = end/power (red), 0-9 * # = keypad, h = plug/unplug a headset.
 
 Sound plays through ffplay (from ffmpeg) and is also saved to out/audio.wav.
+Settings changed on the phone are kept in state/flash.bin between sessions
+(--fresh starts again from the dump).
 """
 import argparse
 import math
@@ -176,10 +178,17 @@ def main():
     p.add_argument("--no-skin", dest="skin", action="store_false",
                    help="show only the screen, without the phone around it")
     p.add_argument("--mute", action="store_true", help="don't play sound (it is still saved to out/audio.wav)")
+    p.add_argument("--fresh", action="store_true",
+                   help="start from the dump, ignoring the saved phone state (it is replaced on exit)")
     args = emu.parse_args(parser=p)
     # a live session has no block budget
     if "--max-blocks" not in sys.argv:
         args.max_blocks = 1 << 62
+    # the live phone keeps its flash between sessions
+    if args.state is None:
+        args.state = emu.ROOT / "state" / "flash.bin"
+    if args.fresh and args.state.exists():
+        args.state.rename(args.state.with_name(args.state.name + ".old"))
     machine = emu.Machine(args)
     machine.realtime = True
     machine.vbc.live = not args.mute

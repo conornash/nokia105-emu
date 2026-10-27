@@ -11,6 +11,7 @@ import argparse
 import collections
 import ctypes
 import datetime
+import hashlib
 import os
 import signal
 import struct
@@ -235,6 +236,7 @@ READ_HANDLERS = {
     eic.EIC_BASE + eic.RIS: lambda m: m.eic.raw(),
     eic.EIC_BASE + eic.MIS: lambda m: m.eic.masked(),
     audio.DMA_INT_STS: lambda m: m.dma.read_status(),
+    audio.AUD_STS: lambda m: m.aud.read_status(),
 }
 
 EIC_POWER_KEY = 1 << 1
@@ -297,6 +299,8 @@ WRITE_HANDLERS = {
     eic.EIC_BASE + eic.IE: lambda m, v: m.eic.update(),
     eic.EIC_BASE + eic.IC: lambda m, v: m.eic.on_clr(v),
     **{a: (lambda m, v, ch=ch: m.vbc.on_fifo_write(ch, v)) for ch, a in enumerate(audio.VBC_DA)},
+    audio.AUD_CLR: lambda m, v: m.aud.on_clear(v),
+    audio.AUD_EN: lambda m, v: m.aud.on_enable(v),
 }
 
 ARM_EXCEPTIONS = {1: "undefined instruction", 2: "SWI", 3: "prefetch abort",
@@ -368,6 +372,7 @@ class Machine:
         self.eic = eic.DigitalEic(self, args.headset)
         self.vbc = audio.Vbc(self, args.out / "audio.wav")
         self.dma = audio.Dma(self, self.vbc)
+        self.aud = audio.AudCtl(self)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         for at_ms, name, hold_ms in args.keys:
@@ -468,9 +473,38 @@ class Machine:
         self.uc.mem_map_ptr(base, size, perms, ctypes.addressof(buf))
         return buf, size
 
+    def _flash_source(self):
+        """The flash image to boot: the saved state (--state) when it was made
+        from this dump, else the dump itself."""
+        dump = self.args.dump / "flash.bin"
+        self.dump_hash = hashlib.sha256(dump.read_bytes()).hexdigest()
+        state = self.args.state
+        if state and state.exists():
+            tag = state.with_name(state.name + ".source")
+            if tag.exists() and tag.read_text().strip() == self.dump_hash:
+                print(f"flash: saved state {state}")
+                return state
+            print(f"flash: {state} was saved from a different dump, starting from the dump")
+        return dump
+
+    def save_state(self):
+        """Write the flash back to --state if the firmware changed it (its
+        settings, contacts and messages live in flash)."""
+        state = self.args.state
+        data = bytes(self.flash)[:self.flash_size]
+        if not state or hashlib.sha256(data).digest() == self.loaded_hash:
+            return
+        state.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state.with_name(state.name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(state)
+        state.with_name(state.name + ".source").write_text(self.dump_hash + "\n")
+        print(f"flash: saved state to {state}")
+
     def _map_memory(self):
         self.flash, self.flash_size = self._map_file(
-            FLASH_BASE, self.args.dump / "flash.bin", perms=UC_PROT_READ | UC_PROT_EXEC)
+            FLASH_BASE, self._flash_source(), perms=UC_PROT_READ | UC_PROT_EXEC)
+        self.loaded_hash = hashlib.sha256(bytes(self.flash)[:self.flash_size]).digest()
         self.bootrom = ctypes.create_string_buffer(
             (self.args.dump / "bootrom.bin").read_bytes(), BOOTROM_SIZE)
         self.rom_at_zero = None
@@ -832,6 +866,7 @@ class Machine:
                 break
         self.trace.close()
         self.flash_log.close()
+        self.save_state()
         self.exc_log.close()
         self.errors.close()
         self.lcd_log.close()
@@ -981,6 +1016,9 @@ def parse_args(argv=None, parser=None):
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",
                    help="press KEY at emulated time MS for HOLD ms (default 150); keys: "
                         "0-9 * # up down left right select lsoft rsoft call end")
+    p.add_argument("--state", type=Path, default=None, metavar="FILE",
+                   help="keep the phone's flash (settings, contacts, messages) in FILE: "
+                        "boot from it if it exists, save changes to it at the end")
     p.add_argument("--dump", type=Path, default=default_dump(), metavar="DIR",
                    help="directory with flash.bin and bootrom.bin (default: $NOKIA_DUMP, ./dump or ../dump)")
     p.add_argument("--out", type=Path, default=ROOT / "out")

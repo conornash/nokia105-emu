@@ -1,9 +1,10 @@
 # firmware dumps are copyrighted and device-specific: never commit them
 dump/
 *.bin
-# emulator run output
+# emulator run output, and the saved phone (a copy of your firmware)
 out/
 out_*/
+state/
 # build products and environments
 liblzma_sprd.dylib
 liblzma_sprd.so

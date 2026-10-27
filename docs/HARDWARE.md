@@ -131,9 +131,19 @@ FIFO; a mixer (user `0x822bf20`) and the kernel's audio HAL (descriptor
 `AUDIO_HAL` at RAM `0x4390f80`) turn that into 48 kHz stereo in a ring
 buffer, and DMA channels 4 and 5 copy 320-sample blocks from the ring to the
 voice-band codec's DAC FIFOs at `0x82003000` (left) and `0x82003004`
-(right). The DMA controller's channels sit at `0x20101000 + 0x40 * n`
+(right). The DAC runs at 32 kHz: measured from the pitch of Nokia Tune,
+which plays exactly 1.5x sharp at 48 kHz (no register selecting the rate
+was found; the firmware resamples its 22.05 kHz synthesiser output in
+software). The DMA controller's channels sit at `0x20101000 + 0x40 * n`
 (Linux sprd-dma layout); the hardware clears a channel's enable bit when a
 block is done, and IRQ 31 reports it.
+
+The power-up also waits on an analogue control block at `0x8a002000`
+(IRQ 16): after starting a ramp through bit 14 of `+0x0c`, the state
+machine enables the block's interrupts (`+0x28` bits 0-1) and arms a
+600 ms timer; status `+0x20` bit 5 ends the wait early (its deferred
+handler, kern `0x4066ffc`, runs the timer's callback). The emulator raises
+it 20 ms after it is enabled; without it every sound starts 600 ms late.
 
 Before any of this runs, an audio power state machine (kern `0x40670fa`,
 handler table at `0x40a59d8`) powers the codec up. Its calibration step
@@ -141,7 +151,16 @@ handler table at `0x40a59d8`) powers the codec up. Its calibration step
 `0x820013d4` and waits for bits 12 and 10; without them the ARM data path
 (bit 12 of the HAL flags) is never enabled and the DMA plays its silence
 buffer (`0x4390d00`). The mixer drops the samples when the active profile
-mutes ringtones (Silent).
+mutes ringtones (Silent). Keypad tones take the same path.
+
+### Flash and saved state
+
+The firmware keeps its settings, contacts and messages in the NV area of
+the flash (around `0x398000`-`0x3c0000`), written through the SPI flash
+controller. The flash model applies those writes to its in-memory image;
+`--state FILE` saves that image at the end of a run and boots from it
+next time, with `FILE.source` holding the SHA-256 of the dump it came
+from.
 
 ### DSP
 

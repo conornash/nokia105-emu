@@ -26,8 +26,22 @@ VBC (0x82003000, the "ARM_VB" voice-band codec of older Spreadtrum chips):
   most 160); +0x40.. gain and filter settings (not modelled). Before
   starting the DMA the driver primes both FIFOs with silence (kern
   0x407f492).
-The DAC sample rate is the PMIC codec register 0x82001380 (0xbb80 =
-48000 Hz while a ringtone plays).
+The DAC plays 32000 samples a second. This was measured, not read from a
+register: played at 48 kHz, every note of Nokia Tune came out exactly 1.5x
+sharp (E6 at 1978 Hz instead of 1318.5, the whole tune 2.4 s instead of
+3.6 s), and at 32 kHz they are in tune. The firmware resamples its 22.05 kHz
+MIDI output in software instead of reprogramming the DAC, which suggests
+the rate is fixed; no register selecting it was found.
+
+The audio power-up sequence also waits on a small analogue control block
+at 0x8a002000 (INTC line 16; pointer at RAM 0x4302ca0, helpers flash
+0x224d0..0x225d2): after a ramp it starts through bit 14 of +0x0c, the
+power state machine (kern 0x4066e66, scenario 13) enables the block's two
+interrupts (+0x28 bits 0-1) and arms a 600 ms timer. Status +0x20 bit 5
+is the one that ends the wait: the deferred handler (kern 0x4066ffc) calls
+the timer's own callback for it. +0x24 is write-1-to-clear. Without the
+interrupt every sound starts 600 ms late; the emulator raises it 20 ms
+after it is enabled (the real ramp time is not known).
 
 Each FIFO is modelled as a timeline: samples queue up behind the ones
 already waiting and play at the sample rate. A DMA block completes when
@@ -52,11 +66,16 @@ INT_FRAG, INT_BLK, INT_TRSC = 1 << 0, 1 << 1, 1 << 2
 INT_STS_SHIFT, INT_RAW_SHIFT, INT_CLR_SHIFT = 8, 16, 24
 IRQ_LINE = 31
 
+AUD_CTL = 0x8a002000
+AUD_STS, AUD_CLR, AUD_EN = AUD_CTL + 0x20, AUD_CTL + 0x24, AUD_CTL + 0x28
+AUD_DONE = 1 << 1           # status bit 5
+AUD_IRQ_LINE = 16
+AUD_RAMP_MS = 20
+
 VBC_BASE = 0x82003000
 VBC_DA = (VBC_BASE + 0x00, VBC_BASE + 0x04)
 FIFO_SAMPLES = 160
-RATE_REG = 0x82001380
-OUT_RATE = 48000
+OUT_RATE = 32000
 
 
 class Vbc:
@@ -76,7 +95,6 @@ class Vbc:
         self.samples = 0            # samples received, both DACs
         self.wav = None
         self.player = None
-        self.rate_warned = False
 
     def now(self):
         return self.m.nblocks * OUT_RATE // (1000 * self.m.blocks_per_ms)
@@ -84,10 +102,6 @@ class Vbc:
     def push(self, ch, samples):
         """Queue samples on DAC ch. Returns the block time at which the last
         one enters the FIFO, i.e. when a DMA block feeding them completes."""
-        rate = self.m.regs.get(RATE_REG, OUT_RATE)
-        if rate not in (0, OUT_RATE) and not self.rate_warned:   # 0: not set up yet
-            self.rate_warned = True
-            print(f"[block {self.m.nblocks}] audio: DAC rate {rate} Hz, played as {OUT_RATE} Hz")
         self.flush()
         start = max(self.end[ch], self.now())
         stop = start + len(samples)
@@ -228,3 +242,32 @@ class Dma:
         self.m.regs[CH_BASE + CH_STRIDE * ch + CFG] &= ~CFG_EN
         self.raw[ch] |= INT_FRAG | INT_BLK | INT_TRSC
         self.update_line()
+
+
+class AudCtl:
+    """The analogue control block at 0x8a002000: see the module docstring."""
+
+    def __init__(self, machine):
+        self.m = machine
+        self.flags = 0          # bit 0 -> status bit 4, bit 1 -> status bit 5
+        self.ramps = 0
+
+    def read_status(self):
+        return self.m.regs.get(AUD_STS, 0) & 3 | self.flags << 4
+
+    def on_clear(self, value):
+        self.flags &= ~value & 3
+        self.update_line()
+
+    def on_enable(self, value):
+        if value & AUD_DONE and not self.flags & AUD_DONE:
+            self.m.schedule(AUD_RAMP_MS * self.m.blocks_per_ms, self.ramp_done)
+        self.update_line()
+
+    def ramp_done(self):
+        self.flags |= AUD_DONE
+        self.ramps += 1
+        self.update_line()
+
+    def update_line(self):
+        self.m.intc.set_line(AUD_IRQ_LINE, self.flags & self.m.regs.get(AUD_EN, 0))

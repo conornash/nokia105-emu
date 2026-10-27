@@ -31,11 +31,15 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
-- Sound from the phone's own MIDI synthesiser: ringtones, alerts and
-  previews play through the speakers (via `ffplay`) and are saved to
-  `out/audio.wav`. If your phone was dumped in the Silent profile, as the
-  TA-1423 used here was, ringtones stay muted until you switch to General
-  (Menu → Settings → Profiles → General → Activate).
+- Sound: ringtones, alerts, the start-up tune and keypad tones play through
+  the speakers (via `ffplay`) and are saved to `out/audio.wav`. They follow
+  the phone's own settings: a phone dumped in the Silent profile, as the
+  TA-1423 used here was, stays quiet until you switch to General (Menu →
+  Settings → Profiles → General → Activate), and keypad tones play only if
+  their level (Settings → Tone settings → Keypad tones) is above zero.
+- The phone keeps its settings: the live window saves the flash to
+  `state/flash.bin` when it closes and boots from it next time, so a
+  profile or tone change only has to be made once.
 - A live window that runs at the phone's real speed: home screen about
   7.5 s after launch, menus open instantly. It shows the screen in a
   drawing of the phone whose keys you can click.
@@ -44,10 +48,8 @@ Works:
 
 Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
-- Sounds made by the DSP (keypad tones, call audio) and FM radio are
-  silent.
-- No camera, no USB, and settings changes (such as the profile) don't
-  persist between runs.
+- Call audio and FM radio are silent.
+- No camera or USB.
 - Only tested with firmware `MOCOR_20C_6531E_W23.19.4` from a TA-1423.
   Other SC6531E phones will need changes.
 
@@ -99,6 +101,8 @@ same options and saves every new screen to `out/frames/`.
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
 | `--headset` | boot with a headset plugged in |
 | `--mute` | don't play sound in the live window (still saved to `out/audio.wav`) |
+| `--fresh` | live window: start again from the dump (the previous `state/flash.bin` is kept as `.old`) |
+| `--state FILE` | keep the phone's flash in FILE (the live window uses `state/flash.bin`; headless runs start from the dump unless given this) |
 | `--scale N` | window pixels per LCD pixel (`live.py`; default: the largest up to 3 that fits the screen, in steps of 0.25) |
 | `--no-skin` | show only the screen, without the phone around it (`live.py`) |
 | `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down` |
