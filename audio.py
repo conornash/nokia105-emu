@@ -47,10 +47,13 @@ Each FIFO is modelled as a timeline: samples queue up behind the ones
 already waiting and play at the sample rate. A DMA block completes when
 its last sample would enter the 160-sample FIFO, which paces the guest's
 mixer at the real sample rate. Output is written up to the current
-emulated time to out/audio.wav and, in the live window, to ffplay.
+emulated time to out/audio.wav and, in the live window, to ffplay through
+LivePlayer.
 """
 import shutil
 import subprocess
+import threading
+import time
 import wave
 from array import array
 
@@ -151,8 +154,8 @@ class Vbc:
         if not exe:
             print("audio: ffplay not found (install ffmpeg); sound goes to out/audio.wav only")
             return None
-        return [exe, "-nodisp", "-loglevel", "quiet", "-fflags", "nobuffer", "-probesize", "32",
-                "-analyzeduration", "0", "-f", "s16le", "-ar", str(OUT_RATE),
+        return [exe, "-nodisp", "-autoexit", "-loglevel", "quiet", "-fflags", "nobuffer",
+                "-probesize", "32", "-analyzeduration", "0", "-f", "s16le", "-ar", str(OUT_RATE),
                 "-ch_layout", "stereo", "-i", "-"]
 
     def play(self, data):
@@ -161,23 +164,73 @@ class Vbc:
             if not cmd:
                 self.live = False
                 return
-            self.player = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        try:
-            self.player.stdin.write(data)
-            self.player.stdin.flush()
-        except (BrokenPipeError, OSError):
-            self.live = False
+            self.player = LivePlayer(cmd)
+        self.player.feed(data)
 
     def close(self):
         self.flush()
         if self.wav:
             self.wav.close()
         if self.player:
-            try:
-                self.player.stdin.close()
-            except OSError:
-                pass
-            self.player.terminate()
+            self.player.close()
+
+
+class LivePlayer:
+    """Feeds ffplay a continuous real-time stream, the way a sound card is
+    fed: every 10 ms a thread sends the next 10 ms, the phone's samples when
+    there are any and silence otherwise. ffplay does not play short bursts
+    with gaps between them reliably, which is all the phone produces for a
+    key beep. Samples are queued for at most MAX_QUEUE_MS, so latency stays
+    bounded when the emulator delivers them in a rush."""
+
+    TICK_MS = 10
+    LEAD_MS = 30            # stay this far ahead of the wall clock
+    MAX_QUEUE_MS = 150
+
+    def __init__(self, cmd):
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        self.queue = bytearray()
+        self.lock = threading.Lock()
+        self.running = True
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def feed(self, data):
+        with self.lock:
+            self.queue += data
+            excess = len(self.queue) - 4 * OUT_RATE * self.MAX_QUEUE_MS // 1000
+            if excess > 0:
+                del self.queue[:excess]
+
+    def run(self):
+        start, sent = time.monotonic(), 0
+        while self.running:
+            due = int((time.monotonic() - start) * OUT_RATE) + OUT_RATE * self.LEAD_MS // 1000
+            n = due - sent
+            if n > 0:
+                with self.lock:
+                    take = min(len(self.queue) // 4, n)
+                    data = bytes(self.queue[:4 * take])
+                    del self.queue[:4 * take]
+                try:
+                    self.proc.stdin.write(data + bytes(4 * (n - take)))
+                    self.proc.stdin.flush()
+                except OSError:
+                    return
+                sent = due
+            time.sleep(self.TICK_MS / 1000)
+
+    def close(self):
+        self.running = False
+        self.thread.join(timeout=1)
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()
 
 
 class Dma:
