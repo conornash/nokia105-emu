@@ -26,7 +26,9 @@ STS2 = 0x34
 CTL8 = 0x54
 
 INT_TX_END = 1 << 8
+STS2_RXF_EMPTY = 1 << 5
 STS2_TXF_EMPTY = 1 << 7
+STS2_BUSY = 1 << 8
 CTL8_DATA = 1 << 15
 
 WIDTH, HEIGHT = 128, 160
@@ -138,6 +140,16 @@ class Spi1:
         return self.rx
 
     def on_txd(self, value):
+        # Transfers finish instantly, so report completion: TX end in INT_RAW,
+        # and STS2 idle with both FIFOs empty.  A driver that polls those -- as
+        # the real controller requires, and as fpdoom's spi_wait_tx does --
+        # otherwise spins forever waiting for a bit nothing ever set.
+        self.m.regs[SPI1_BASE + INT_RAW] = (
+            self.m.regs.get(SPI1_BASE + INT_RAW, 0) | INT_TX_END)
+        self.m.regs[SPI1_BASE + STS2] = (
+            (self.m.regs.get(SPI1_BASE + STS2, 0) & ~STS2_BUSY)
+            | STS2_TXF_EMPTY | STS2_RXF_EMPTY)
+
         bits = 16 if value >> 8 else 8
         if not self.reg(CTL8) & CTL8_DATA:
             cmd = value >> 8 if value >> 8 else value & 0xff
