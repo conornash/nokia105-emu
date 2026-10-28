@@ -44,6 +44,7 @@ faulting address (the engine's windowed mode).
 | SPI1 (LCD panel bus) | `0x69000000` | | `lcd.py` |
 | Keypad | `0x87000000` | 12 | `keypad.py` |
 | Digital EIC (debounced inputs) | `0x8a001000` | 11 | `eic.py` |
+| SIM card interface (`--sim`) | `0x89000000` | 17 | `sim.py` |
 | ADI bus to the PMIC | `0x82000000` | | `emu.py` |
 | PMIC (SC1161): RTC, EIC, ADC | `0x82001000` (via ADI) | 36 | `pmic.py`, `emu.py` |
 | DSP shared memory / mailbox | `0x30000000` | 21 | `dsp.py` |

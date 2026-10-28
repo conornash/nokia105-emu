@@ -141,6 +141,7 @@ same options and saves every new screen to `out/frames/`.
 | `--dump DIR` | directory with `flash.bin` and `bootrom.bin` (default `$NOKIA_DUMP`, `./dump` or `../dump`) |
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
 | `--headset` | boot with a headset plugged in |
+| `--sim`, `--sim-slot N` | insert a test 2G SIM card (`sim.py`) in slot N (0 = SIM1); every command it gets is logged to `out/sim.log`. Without `--sim` the phone has no SIM, as before |
 | `--mute` | don't play sound in the live window (still saved to `out/audio.wav`) |
 | `--fresh` | live window: start again from the dump (the previous `state/flash.bin` is kept as `.old`) |
 | `--state FILE` | keep the phone's flash in FILE (the live window uses `state/flash.bin`; headless runs start from the dump unless given this) |

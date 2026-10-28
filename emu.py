@@ -44,6 +44,7 @@ import lights  # noqa: E402
 import lzma_engine  # noqa: E402
 import pmic  # noqa: E402
 import sfc  # noqa: E402
+import sim  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 
@@ -400,6 +401,12 @@ class Machine:
         self.vbc = audio.Vbc(self, args.out / "audio.wav")
         self.dma = audio.Dma(self, self.vbc)
         self.aud = audio.AudCtl(self)
+        # the SIM controller is only modelled when a card is inserted, so a
+        # run without --sim sees the registers exactly as before
+        self.sim = None
+        if args.sim:
+            self.sim = sim.SimController(self, {args.sim_slot}, args.out / "sim.log")
+            sim.install(self, READ_HANDLERS, WRITE_HANDLERS)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1149,6 +1156,10 @@ def parse_args(argv=None, parser=None):
     p.add_argument("--rtc-time", type=datetime.datetime.fromisoformat, default=datetime.datetime.now(),
                    metavar="YYYY-MM-DDTHH:MM:SS", help="RTC time at power-on (default: host local time)")
     p.add_argument("--headset", action="store_true", help="start with a headset plugged in")
+    p.add_argument("--sim", action="store_true",
+                   help="insert a test SIM card (GSM 11.11, see sim.py); commands go to OUT/sim.log")
+    p.add_argument("--sim-slot", type=int, choices=(0, 1, 2), default=0,
+                   help="slot the --sim card is in (0 = the phone's SIM1)")
     p.add_argument("--slow", action="store_true",
                    help="per-block Python hook (tracks unique blocks; implied by -v and --trace-blocks)")
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",
