@@ -28,6 +28,12 @@ level-triggered: pending while enabled (+0x18) and level == polarity
 Power-chip interrupts reach the ARM as INTC bank 1 bit 4 (irq 36); the
 dispatcher (flash 0x1666e) then reads the source bits from 0x82001020,
 where bit 2 is the RTC (irq 66) and bit 5 the EIC (irq 69).
+
+Switching off (holding the red key, then Switch off!) ends in flash
+0x10d5c: it sets the power-down bit of each supply (0x82001438..9c),
+unlocks 0x82001588 with 0x6e7f and writes 0x1f to 0x82001418, then spins
+at 0x10e0a. 0x82001418 is written nowhere else, so that write is taken as
+the chip cutting its own power.
 """
 import datetime
 
@@ -42,6 +48,7 @@ RTC_EPOCH = datetime.datetime(2000, 1, 1)
 UNIT_SECONDS = (1, 60, 3600, 86400)
 UNIT_MODULO = (60, 60, 24, 1 << 16)
 RTC_INT_STS = 0x820011b4
+POWER_DOWN = 0x82001418
 RTC_INT_CLR = 0x820011b8
 ANA_INT_STS = 0x82001020
 ANA_IRQ_LINE = 36          # INTC bank 1 bit 4
@@ -106,6 +113,10 @@ class Pmic:
         self.m.schedule(RTC_LATCH_BLOCKS, lambda: self.rtc_event(bit))
         self.alarm[index] = value & 0xffff
         self.schedule_alarm()
+
+    def clock(self):
+        """The RTC's date and time now."""
+        return RTC_EPOCH + datetime.timedelta(seconds=self.rtc_now())
 
     def alarm_seconds(self):
         return sum(v * u for v, u in zip(self.alarm, UNIT_SECONDS))

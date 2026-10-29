@@ -31,6 +31,11 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
+- Switching off and on: hold the red key (Esc) to switch the phone off,
+  and hold it again to switch it back on. It boots from its saved
+  settings with the clock carried on; let go too soon and it switches off
+  again, as the real phone does. A headless run ends when the phone
+  switches off ("stop: powered off").
 - Alarms: an alarm set in the Alarm app rings at its time with the alarm
   screen and tone, and Stop and Snooze work. Alarms are kept with the
   phone's settings, so they ring in later sessions too (while the
@@ -99,7 +104,7 @@ Click the keys on the phone in the window, or use the keyboard:
 | `[` / F1 | left soft key |
 | `]` / F2 / Backspace | right soft key (usually Back) |
 | `c` | call (green) |
-| Esc | end / power (red) |
+| Esc | end / power (red); hold to switch off, and on again |
 | `0`-`9`, `*`, `#` | keypad |
 | `h` | plug / unplug a headset |
 | `s` | screenshot: the screen at 3x, and the whole phone, to `out/shots/` |
@@ -137,6 +142,22 @@ Example, headless: boot, open the menu and save the screens:
 At the end of a run `out/report.txt` lists the final registers, interrupt
 counts and every peripheral register touched; `out/psram.bin` and
 `out/iram.bin` are RAM dumps.
+
+## Testing
+
+`make test` runs scripted sessions headless and checks them against a
+reference recorded earlier from your dump: the boot and a menu tour; an
+alarm set, rung and stopped, with the backlight timing out and the torch;
+and switching off. Emulation is deterministic, so every log line, screen
+and sound sample has to match; a difference is reported with the first
+log line, screen and moment of sound that changed, and the changed screen
+is saved next to the reference one in `out/test/`. The runs take a few
+seconds.
+
+The reference is made from your firmware, so it isn't in the repository:
+record it with `make test-update` on a version you trust (a release, say)
+before changing anything, and again after a change that is meant to alter
+what the phone does.
 
 ## How it works
 
@@ -181,6 +202,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `lights.py` | screen and keypad backlights, torch |
 | `dsp.py` | DSP mailbox stub |
 | `disasm.py`, `mkelf.py` | helpers: disassemble a range; wrap a raw image as an ELF for Ghidra |
+| `tests/regress.py` | `make test`: scripted runs checked against a recorded reference |
 | `third_party/lzmadec.h` | LZMA decoder from spreadtrum_flash (public domain) |
 
 ## Credits

@@ -251,6 +251,7 @@ READ_HANDLERS = {
 }
 
 EIC_POWER_KEY = 1 << 1
+POWERED_OFF = "powered off"     # stop reason when the phone switches itself off
 EIC_BATTERY = 1 << 8  # inferred, see Machine.eic_inputs
 
 # ADC results are keyed by the channel register's low 7 bits (channel in
@@ -300,6 +301,7 @@ WRITE_HANDLERS = {
     **{a: (lambda m, v, i=i: m.pmic.on_rtc_set(i, v)) for i, a in enumerate(pmic.RTC_SET)},
     **{a: (lambda m, v, i=i: m.pmic.on_alarm_set(i, v)) for i, a in enumerate(pmic.RTC_ALARM)},
     **{a: (lambda m, v: m.lights.on_write()) for a in lights.REGISTERS},
+    pmic.POWER_DOWN: lambda m, v: m.power_off(),
     lcd.LCDC_BASE + lcd.LCDC_CTRL: lambda m, v: m.lcdc.on_ctrl(v),
     lcd.LCDC_BASE + lcd.IRQ_CLR: lambda m, v: m.lcdc.on_clr(v),
     lcd.LCDC_BASE + lcd.IRQ_EN: lambda m, v: m.lcdc.update_line(),
@@ -869,6 +871,12 @@ class Machine:
         if self.stop_reason is None:
             self.stop_reason = reason
         self.uc.emu_stop()
+
+    def power_off(self):
+        """The phone switched itself off: the run ends, as the chip loses
+        power (the saved phone is written as usual)."""
+        print(f"[block {self.nblocks}] power off")
+        self.stop(POWERED_OFF)
 
     # run and report
 

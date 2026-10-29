@@ -44,9 +44,14 @@ class Lights:
     def read(self):
         return self.backlight(), self.keypad(), self.torch()
 
+    @staticmethod
+    def lit(state):
+        backlight, keypad, torch = state
+        return backlight is not None, keypad, torch
+
     def on_write(self):
         old, self.state = self.state, self.read()
-        for name, was, now in zip(("backlight", "keypad light", "torch"), old, self.state):
-            # level steps while on are not worth a line each
-            if (was is None or was is False) != (now is None or now is False):
-                self.log(f"{name} {'on' if now not in (None, False) else 'off'}")
+        # level steps while on are not worth a line each
+        for name, was, now in zip(("backlight", "keypad light", "torch"), self.lit(old), self.lit(self.state)):
+            if was != now:
+                self.log(f"{name} {'on' if now else 'off'}")

@@ -15,6 +15,10 @@ The screen dims and darkens with the phone's backlight, the key labels
 glow while the keypad backlight is on, and the torch lights up on the top
 edge (up twice on the home screen toggles it).
 
+Holding the red key switches the phone off (Switch off!); holding it again
+switches it back on, booting from the saved phone with its clock carried
+on.
+
 Screenshots (the screen at 3x, and the whole phone) and recordings (an
 animated GIF of the screen) go to out/shots/.
 
@@ -137,6 +141,7 @@ class Window:
         for sig in (signal.SIGINT, signal.SIGTERM):                # Ctrl+C, kill
             signal.signal(sig, lambda *_: self.root.after(0, self.close))
         self.closing = False
+        self.off_since = None   # wall time the phone switched itself off
         self.thread = threading.Thread(target=machine.run, daemon=True)
 
     def on_press(self, event):
@@ -176,8 +181,29 @@ class Window:
     def press(self, name):
         if name not in self.held:
             self.held.add(name)
-            self.m.inject("press", name)
+            if self.m.stop_reason == emu.POWERED_OFF and name == emu.keypad.POWER_KEY:
+                self.power_on()
+            else:
+                self.m.inject("press", name)
             self.light(name, "normal")
+
+    def power_on(self):
+        """Switch the phone on again. A new machine boots from the saved
+        phone with its clock carried on from the old one's, and the red key
+        held for as long as it is held here: let go too soon and the
+        firmware switches off again, as on the phone."""
+        self.thread.join()          # the old machine saves the phone as it ends
+        old = self.m
+        off_for = time.monotonic() - (self.off_since or time.monotonic())
+        old.args.rtc_time = old.pmic.clock() + datetime.timedelta(seconds=off_for)
+        old.args.power_key_ms = 0
+        machine = emu.Machine(old.args)
+        machine.realtime = True
+        machine.vbc.live = old.vbc.live
+        machine.keypad.press(emu.keypad.POWER_KEY)
+        self.m, self.off_since = machine, None
+        self.thread = threading.Thread(target=machine.run, daemon=True)
+        self.thread.start()
 
     def release(self, name):
         self.pending_release.pop(name, None)
@@ -196,7 +222,10 @@ class Window:
             self.canvas.itemconfigure(self.body, image=self.bodies[keypad])
             self.canvas.itemconfigure(self.torch, state="normal" if torch else "hidden")
         self.lights = keypad, torch
-        version = (self.m.lcdc.refreshes, self.m.panel.pixels, backlight)
+        off = self.m.stop_reason == emu.POWERED_OFF
+        if off and self.off_since is None:
+            self.off_since = time.monotonic()
+        version = (self.m.lcdc.refreshes, self.m.panel.pixels, backlight, off)
         if version != self.shown:
             if self.shown is None or version[:2] != self.shown[:2]:
                 self.lcd_image = Image.frombuffer("RGB", (lcd.WIDTH, lcd.HEIGHT), self.m.panel.fb.tobytes(),
@@ -205,7 +234,7 @@ class Window:
                     self.recording.append((time.monotonic(), self.lcd_image))
             self.shown = version
             img = self.lcd_image
-            shade = brightness(backlight)
+            shade = 0 if off else brightness(backlight)
             if shade < 1:
                 img = img.point(lambda v: round(v * shade))
             # whole pixels first, then averaged down to a fractional scale
@@ -217,7 +246,10 @@ class Window:
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.itemconfigure(self.screen, image=self.photo)
         ms = self.m.nblocks // emu.BLOCKS_PER_MS
-        state = self.m.stop_reason or ("booting" if self.m.lcdc.refreshes < 3 else "running")
+        if off:
+            state = "switched off: hold the red key (Esc) to switch on"
+        else:
+            state = self.m.stop_reason or ("booting" if self.m.lcdc.refreshes < 3 else "running")
         notes = ["torch on"] if torch else []
         if self.recording:
             seconds = time.monotonic() - self.recording[0][0]
@@ -229,7 +261,7 @@ class Window:
             notes.append(self.notice[0])
         self.status.configure(text=f" {ms // 60000}:{ms // 1000 % 60:02d}.{ms // 100 % 10} emulated  "
                                    + "  ".join([state] + notes))
-        if self.thread.is_alive():
+        if not self.closing:
             self.root.after(40, self.refresh)
 
     def shot_path(self, suffix):

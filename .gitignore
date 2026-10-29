@@ -5,6 +5,8 @@ dump/
 out/
 out_*/
 state/
+# the regression reference, recorded from your firmware
+tests/reference/
 # build products and environments
 liblzma_sprd.dylib
 liblzma_sprd.so

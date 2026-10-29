@@ -211,3 +211,13 @@ A normal boot powers off unless:
 Useful breakpoints when the phone shuts down: user `0x080034b8` (message
 then 3 s power-off timer), kernel `0x0400425e` (power down), flash
 `0x10e0a` (final loop).
+
+## Switching off
+
+Holding the red key opens the power menu, and holding on chooses Switch
+off!: the goodbye screen, then flash `0x10d5c` sets the power-down bit of
+each supply (`0x82001438`..`9c`), unlocks `0x82001588` with `0x6e7f` and
+writes `0x1f` to `0x82001418`, and spins at `0x10e0a`. Nothing else writes
+`0x82001418`, so the emulator takes that write as the chip cutting its
+power and ends the run. Switching on is a cold boot with the power key
+held, from the flash as it was saved.
