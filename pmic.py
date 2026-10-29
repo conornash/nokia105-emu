@@ -3,9 +3,13 @@
 The firmware's RTC driver (flash 0x16c54..0x17160, state at 0x42f9c5c):
   0x82001180/84/88/8c  current seconds / minutes / hours / days (read via ADI)
   0x82001190/94/98/9c  set seconds / minutes / hours / days (0x16ee2..)
-  0x820011b0           interrupt enable (the firmware leaves 0xff02)
-  0x820011b4           event status: bit 1 = minute tick (inferred from the
-                       enable mask), bits 8-11 = that field's update done
+  0x820011a0/a4/a8/ac  alarm seconds / minutes / hours / days
+  0x820011b0           interrupt enable (the firmware leaves 0xff02, 0xff12
+                       while an alarm is set)
+  0x820011b4           event status: bit 1 = minute tick, bit 4 = alarm (the
+                       handler, flash 0x16cbe, turns the alarm into MMI
+                       event 0x72 and clears its enable bit), bits 8-11 =
+                       that time field's update done, 12-15 alarm field's
   0x820011b8           write 1s to clear status bits
 After writing the time it marks bits 8-11 pending and busy-waits ~2 ms for
 the RTC interrupt handler (irq 66, registered as 0x16cbe) to clear them.
@@ -29,9 +33,11 @@ import datetime
 
 RTC_COUNT = (0x82001180, 0x82001184, 0x82001188, 0x8200118c)
 RTC_SET = (0x82001190, 0x82001194, 0x82001198, 0x8200119c)
+RTC_ALARM = (0x820011a0, 0x820011a4, 0x820011a8, 0x820011ac)
 RTC_INT_EN = 0x820011b0
 RTC_INT_MIN = 1 << 1
-RTC_SET_DONE = 0xf00
+RTC_INT_ALARM = 1 << 4
+RTC_SET_DONE = 0xff00      # bits 8-11 time set done, 12-15 alarm set done
 RTC_EPOCH = datetime.datetime(2000, 1, 1)
 UNIT_SECONDS = (1, 60, 3600, 86400)
 UNIT_MODULO = (60, 60, 24, 1 << 16)
@@ -54,6 +60,8 @@ class Pmic:
         # RTC time (seconds since RTC_EPOCH) at emulated time zero
         self.rtc_base = int((start - RTC_EPOCH).total_seconds())
         self.rtc_generation = 0
+        self.alarm = [0] * 4            # seconds, minutes, hours, days
+        self.alarm_generation = 0
         self.schedule_minute()
 
     def seconds_per_block(self):
@@ -65,12 +73,16 @@ class Pmic:
     def rtc_read(self, index):
         return self.rtc_now() // UNIT_SECONDS[index] % UNIT_MODULO[index]
 
+    def blocks_until(self, seconds):
+        """Blocks until the RTC reads `seconds`."""
+        return (seconds - self.rtc_base) * 1000 * self.m.blocks_per_ms - self.m.nblocks
+
     def schedule_minute(self):
         self.rtc_generation += 1
         gen = self.rtc_generation
-        wait = 60 - self.rtc_now() % 60
-        blocks = wait * 1000 * self.m.blocks_per_ms - self.m.nblocks % (1000 * self.m.blocks_per_ms)
-        self.m.schedule(max(1, blocks), lambda: self.minute_tick(gen))
+        now = self.rtc_now()
+        self.m.schedule(max(1, self.blocks_until(now - now % 60 + 60)),
+                        lambda: self.minute_tick(gen))
 
     def minute_tick(self, gen):
         if gen != self.rtc_generation:
@@ -83,8 +95,34 @@ class Pmic:
         field = now // UNIT_SECONDS[index] % UNIT_MODULO[index]
         self.rtc_base += ((value & 0xffff) - field) * UNIT_SECONDS[index]
         self.schedule_minute()
+        self.schedule_alarm()
         bit = 1 << (8 + index)
         self.m.schedule(RTC_LATCH_BLOCKS, lambda: self.rtc_event(bit))
+
+    def on_alarm_set(self, index, value):
+        """Alarm registers latch like the time ones and acknowledge with bits
+        12-15 (the driver waits for them, flash 0x16e12, then asserts)."""
+        bit = 1 << (12 + index)
+        self.m.schedule(RTC_LATCH_BLOCKS, lambda: self.rtc_event(bit))
+        self.alarm[index] = value & 0xffff
+        self.schedule_alarm()
+
+    def alarm_seconds(self):
+        return sum(v * u for v, u in zip(self.alarm, UNIT_SECONDS))
+
+    def schedule_alarm(self):
+        """The alarm fires when the counters reach the alarm registers; an
+        alarm time already past never fires."""
+        self.alarm_generation += 1
+        gen = self.alarm_generation
+        blocks = self.blocks_until(self.alarm_seconds())
+        if blocks > 0:
+            self.m.schedule(blocks, lambda: self.alarm_due(gen))
+
+    def alarm_due(self, gen):
+        if gen == self.alarm_generation:
+            print(f"[block {self.m.nblocks}] rtc: alarm {RTC_EPOCH + datetime.timedelta(seconds=self.alarm_seconds())}")
+            self.rtc_event(RTC_INT_ALARM)
 
     def rtc_event(self, bits):
         self.rtc_status |= bits

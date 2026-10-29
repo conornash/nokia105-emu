@@ -12,9 +12,9 @@ The CPU is emulated with [Unicorn](https://www.unicorn-engine.org/); the
 chip's peripherals are reimplemented in Python from what the firmware
 expects of them: interrupt controller, timers, SPI flash, hardware LZMA,
 LCD controller and panel, the JPEG decoder and colour converter, keypad,
-the PMIC (RTC, ADC, external interrupts, audio codec), the DMA controller
-and voice-band codec that play sound, and enough of the DSP mailbox to
-get past start-up.
+the PMIC (RTC and alarm, ADC, external interrupts, audio codec, backlight
+LEDs), GPIO, the DMA controller and voice-band codec that play sound, and
+enough of the DSP mailbox to get past start-up.
 
 **No firmware is included.** You need to dump your own phone; see
 [docs/DUMPING.md](docs/DUMPING.md).
@@ -31,6 +31,14 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
+- Alarms: an alarm set in the Alarm app rings at its time with the alarm
+  screen and tone, and Stop and Snooze work. Alarms are kept with the
+  phone's settings, so they ring in later sessions too (while the
+  emulator is running, like the real phone while it is on).
+- Lights: the screen follows the phone's backlight, dimming with its
+  Intensity setting and going dark when the backlight times out; the key
+  labels light up with the keypad backlight; and the torch (Up twice on
+  the home screen, or hold Up) glows on the top edge of the phone.
 - Sound: ringtones, alerts, the start-up tune and keypad tones play through
   the speakers (via `ffplay`) and are saved to `out/audio.wav`. They follow
   the phone's own settings: a phone dumped in the Silent profile, as the
@@ -53,6 +61,8 @@ Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
 - Call audio and FM radio are silent.
 - No camera or USB.
+- No vibration. The phone's own vibrator test only powers the audio path up
+  and down, and no register that drives a motor was found.
 - Only tested with firmware `MOCOR_20C_6531E_W23.19.4` from a TA-1423.
   Other SC6531E phones will need changes.
 
@@ -92,6 +102,10 @@ Click the keys on the phone in the window, or use the keyboard:
 | Esc | end / power (red) |
 | `0`-`9`, `*`, `#` | keypad |
 | `h` | plug / unplug a headset |
+| `s` | screenshot: the screen at 3x, and the whole phone, to `out/shots/` |
+| `r` | start / stop recording the screen as an animated GIF, to `out/shots/` |
+
+The Screenshot and Record buttons under the phone do the same.
 
 ## Command-line options
 
@@ -164,6 +178,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `jpeg_hw.py` | JPEG decoder and colour converter |
 | `keypad.py`, `eic.py`, `pmic.py` | keypad, digital EIC, PMIC (RTC, EIC) |
 | `audio.py` | DMA controller and voice-band codec: sound output |
+| `lights.py` | screen and keypad backlights, torch |
 | `dsp.py` | DSP mailbox stub |
 | `disasm.py`, `mkelf.py` | helpers: disassemble a range; wrap a raw image as an ELF for Ghidra |
 | `third_party/lzmadec.h` | LZMA decoder from spreadtrum_flash (public domain) |

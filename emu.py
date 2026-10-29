@@ -39,6 +39,7 @@ import irq  # noqa: E402
 import jpeg_hw  # noqa: E402
 import keypad  # noqa: E402
 import lcd  # noqa: E402
+import lights  # noqa: E402
 import lzma_engine  # noqa: E402
 import pmic  # noqa: E402
 import sfc  # noqa: E402
@@ -153,6 +154,14 @@ def clk32k_cal_ticks(m):
     return (n + 1) * 6_500_000 // 32768
 
 
+def codec_status(value):
+    if value & 1 << 15:
+        value |= 1 << 12 | 1 << 10
+    if value & 0x1a0 == 0x1a0:
+        value |= 1 << 4 | 1 << 3
+    return value
+
+
 ANA_READ_HANDLERS = {
     0x820010a8: lambda m: m.regs.get(0x820010a8, 0) | 1,
     0x8200108c: lambda m: clk32k_cal_ticks(m) & 0xffff,
@@ -161,9 +170,10 @@ ANA_READ_HANDLERS = {
     0x82001094: lambda m: m.regs.get(0x82001094, 0) & ~1,
     # audio codec (0x82001380..): the power-on sequence (kern 0x402b476)
     # writes 0x6006 then 0xe006 to +0x54 and sleeps 10 ms at a time until
-    # bits 12 and 10 are set (taken as calibration done); started by bit 15
-    0x820013d4: lambda m: m.regs.get(0x820013d4, 0) | (
-        1 << 12 | 1 << 10 if m.regs.get(0x820013d4, 0) & 1 << 15 else 0),
+    # bits 12 and 10 are set (taken as calibration done); started by bit 15.
+    # A second sequence (kern 0x402b538, first used by the alarm) sets bits
+    # 8, 5 and 7 and polls, with no timeout, for bits 4 and 3.
+    0x820013d4: lambda m: codec_status(m.regs.get(0x820013d4, 0)),
     # ADC on the PMIC (flash 0x17a64 adc_read): channel in 0x82001304 bits 0-4
     # (scale in bits 5-6), done flag 0x8200135c bit 0, 12-bit result in
     # 0x8200134c. Conversions finish instantly; see adc_result.
@@ -288,6 +298,8 @@ WRITE_HANDLERS = {
     pmic.EIC_BASE + pmic.EIC_IEV: lambda m, v: m.pmic.update(),
     pmic.EIC_BASE + pmic.EIC_IE: lambda m, v: m.pmic.update(),
     **{a: (lambda m, v, i=i: m.pmic.on_rtc_set(i, v)) for i, a in enumerate(pmic.RTC_SET)},
+    **{a: (lambda m, v, i=i: m.pmic.on_alarm_set(i, v)) for i, a in enumerate(pmic.RTC_ALARM)},
+    **{a: (lambda m, v: m.lights.on_write()) for a in lights.REGISTERS},
     lcd.LCDC_BASE + lcd.LCDC_CTRL: lambda m, v: m.lcdc.on_ctrl(v),
     lcd.LCDC_BASE + lcd.IRQ_CLR: lambda m, v: m.lcdc.on_clr(v),
     lcd.LCDC_BASE + lcd.IRQ_EN: lambda m, v: m.lcdc.update_line(),
@@ -377,6 +389,7 @@ class Machine:
         self.aud = audio.AudCtl(self)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
+        self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
         for at_ms, name, hold_ms in args.keys:
             if name not in self.keypad.names():
                 raise SystemExit(f"--keys: unknown key {name!r}; known: {' '.join(self.keypad.names())}")

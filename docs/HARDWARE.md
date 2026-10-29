@@ -48,6 +48,7 @@ faulting address (the engine's windowed mode).
 | PMIC (SC1161): RTC, EIC, ADC | `0x82001000` (via ADI) | 36 | `pmic.py`, `emu.py` |
 | DSP shared memory / mailbox | `0x30000000` | 21 | `dsp.py` |
 | DMA controller | `0x20100000` | 31 | `audio.py` |
+| GPIO (torch) | `0x8a000000` | | `lights.py` |
 | Voice-band codec (DAC FIFOs) | `0x82003000` | | `audio.py` |
 
 Interrupt controller banks: `+0x00` masked status, `+0x04` raw, `+0x08`
@@ -71,8 +72,19 @@ Reads go through the ADI: write the register offset to `0x82000008`, read
   985..1058, else the phone shows a warning and powers off after 3 s. It
   is probably the battery temperature (*inferred*).
 - RTC: counters `0x82001180`..`8c` (seconds, minutes, hours, days since
-  2000-01-01), set registers `0x82001190`..`9c`, interrupt enable `0xb0`,
-  status `0xb4` (bit 1 = minute tick, bits 8-11 = set done), clear `0xb8`.
+  2000-01-01), set registers `0x82001190`..`9c`, alarm registers
+  `0x820011a0`..`ac` (same fields), interrupt enable `0xb0`, status `0xb4`
+  (bit 1 = minute tick, bit 4 = alarm, bits 8-11 = time set done, 12-15 =
+  alarm set done), clear `0xb8`. The driver waits for the set-done bits
+  (flash `0x16e12`) and stops the phone with an assertion when they don't
+  come. The alarm fires when the counters reach the alarm registers; the
+  handler (flash `0x16cbe`) clears its enable bit and passes it on as MMI
+  event `0x72`, which shows the alarm screen. At boot the firmware programs
+  the next alarm saved in its settings, or a time long past.
+- Backlights (fpdoom's `ANA_WHTLED_CTRL`): `0x8200153c` is the screen, bit
+  0 = off, bits 1-4 = level (Intensity 1-7, default 4); `0x82001540` is
+  the keypad, bit 11 = off, bits 12-15 = level. Both step through their
+  levels 10 ms apart when switched.
   The high byte of spare register `0x820011d0` must be `0xbb` or boot
   resets the clock to 2023-01-01 (flash `0x1727c`).
 - EIC `0x82001200`: data `+0x00`, polarity `+0x14`, enable `+0x18`, raw
@@ -150,7 +162,10 @@ handler table at `0x40a59d8`) powers the codec up. Its calibration step
 (kern `0x402b476`) writes `0x6006` then `0xe006` to the codec register
 `0x820013d4` and waits for bits 12 and 10; without them the ARM data path
 (bit 12 of the HAL flags) is never enabled and the DMA plays its silence
-buffer (`0x4390d00`). The mixer drops the samples when the active profile
+buffer (`0x4390d00`). A later step (kern `0x402b538`), first needed by the
+alarm tone, sets bits 8, 5 and 7 of the same register and polls for bits 4
+and 3 with no timeout; without them `SPRD_CODEC_TASK` spins forever and,
+being of higher priority, starves the MMI. The mixer drops the samples when the active profile
 mutes ringtones (Silent). Keypad tones take the same path.
 
 ### Flash and saved state
@@ -162,6 +177,19 @@ within a few milliseconds). The flash model applies those writes to its
 in-memory image; `--state FILE` saves that image 2 s after the firmware
 last wrote it, and again at the end of a run, and boots from it next time,
 with `FILE.source` holding the SHA-256 of the dump it came from.
+
+### GPIO and lights (`0x8a000000`)
+
+Banks of 16 pins, 0x80 apart: `+0x00` data, `+0x04` data mask, `+0x08`
+direction (1 = output), `+0x18` interrupt sense (fpdoom's layout). Bank 0
+pin 0 is the torch LED: Up twice on the home screen toggles it, holding Up
+lights it while held, and the factory test menu (`#*8378#0#`, Item test)
+has a torch test. The other outputs are set once at boot.
+
+The factory menu's vibrator test switches the audio path on and off once a
+second (the same PMIC and AUD writes as any sound) and writes the codec
+registers `0x82003088`..`ac`, but nothing else; with Vibrating alert on,
+the alarm does not even do that. No vibration motor control was found.
 
 ### DSP
 

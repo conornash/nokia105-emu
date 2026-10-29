@@ -1,6 +1,7 @@
 """The phone drawn around the LCD in the live window: the front of a Nokia
 105 (2022), where every key is a region that can be clicked and lights up
-while it is held.
+while it is held, the key labels glow while the keypad backlight is on, and
+the torch on the top edge lights up.
 
 Lengths are in LCD pixels (the screen is 128x160 of them) and scaled to the
 window. Everything is drawn SS times larger and scaled down for smooth
@@ -8,7 +9,7 @@ edges.
 """
 import math
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 import lcd
 
@@ -23,6 +24,10 @@ PANEL, PANEL_RIM = "#232427", "#393a3f"
 KEY, KEY_TOP = "#36373c", "#4b4c52"
 LIT, LIT_TOP = "#62656d", "#7a7d85"
 INK = "#dadada"
+UNLIT_INK = "#97989c"           # key labels with the keypad backlight off
+HALO = "#ffffff"                # and the light around them when it is on
+TORCH_AT = (W / 2, 2.5)         # the torch LED, on the top edge
+TORCH_LIGHT = "#fff4d6"
 
 # key columns; the row above the digits uses them too
 COLS = (12, 76, 140)
@@ -92,9 +97,10 @@ def bounds(shape):
 class Pen:
     """Draws on an image in LCD pixels, k image pixels to one."""
 
-    def __init__(self, img, k):
+    def __init__(self, img, k, ink=INK):
         self.d = ImageDraw.Draw(img)
         self.k = k
+        self.ink = ink          # colour of key labels and other printing
         self.fonts = {}
 
     def p(self, *v):
@@ -151,7 +157,8 @@ class Pen:
     def length(self, text, size):
         return self.font(size).getlength(text) / self.k
 
-    def text(self, x, y, text, size, fill=INK, anchor="ls", bold=0):
+    def text(self, x, y, text, size, fill=None, anchor="ls", bold=0):
+        fill = fill or self.ink
         self.d.text(self.p(x, y), text, font=self.font(size), fill=fill, anchor=anchor,
                     stroke_width=round(bold * self.k), stroke_fill=fill)
 
@@ -164,6 +171,9 @@ def draw_body(pen):
     # earpiece
     pen.rrect((W / 2 - 28, 23, W / 2 + 28, 29), 3, "#55565b")
     pen.rrect((W / 2 - 27, 24, W / 2 + 27, 28), 2, "#0c0c0d")
+    # torch lens
+    x, y = TORCH_AT
+    pen.rrect((x - 5, y - 1, x + 5, y + 1), 1, "#6e6f74")
     # screen window
     x, y = LCD_AT
     pen.rrect((x - 3.5, y - 3.5, x + lcd.WIDTH + 3.5, y + lcd.HEIGHT + 3.5), 2, "#3d3e43")
@@ -189,7 +199,7 @@ def draw_keys(pen, lit):
         points, r = rocker(x0)
         key(lambda colour, dy: pen.roundpoly([(x, y + dy) for x, y in points], r - dy / 2, colour))
         cx = x0 + KEY_W / 2
-        pen.line([(cx - 8.5, ROCKER[0] + 12), (cx + 8.5, ROCKER[0] + 12)], INK, 1.3)
+        pen.line([(cx - 8.5, ROCKER[0] + 12), (cx + 8.5, ROCKER[0] + 12)], pen.ink, 1.3)
         icon(pen, cx, ROCKER[0] + 40)
 
     x0, y0, x1, y1 = PAD
@@ -203,7 +213,7 @@ def draw_keys(pen, lit):
         if digit == "5":
             # the raised marks either side of the 5
             for x in (x0 + 5, x1 - 5):
-                pen.line([(x, y0 + 12), (x, y1 - 10)], INK, 0.9)
+                pen.line([(x, y0 + 12), (x, y1 - 10)], pen.ink, 0.9)
 
 
 def label(pen, i, digit, extra, cx, base):
@@ -237,14 +247,14 @@ def extra_width(pen, extra):
 def extra_glyph(pen, extra, x, base):
     if extra == "oo":           # voicemail
         for cx in (x + 2, x + 6.5):
-            pen.ellipse((cx - 2, base - 5, cx + 2, base - 1), outline=INK, width=0.9)
-        pen.line([(x + 2, base - 1.4), (x + 6.5, base - 1.4)], INK, 0.9)
+            pen.ellipse((cx - 2, base - 5, cx + 2, base - 1), outline=pen.ink, width=0.9)
+        pen.line([(x + 2, base - 1.4), (x + 6.5, base - 1.4)], pen.ink, 0.9)
     elif extra == "_":          # space
-        pen.line([(x, base - 3), (x, base - 0.8), (x + 7.5, base - 0.8), (x + 7.5, base - 3)], INK, 0.9)
+        pen.line([(x, base - 3), (x, base - 0.8), (x + 7.5, base - 0.8), (x + 7.5, base - 3)], pen.ink, 0.9)
     elif extra == "^":          # shift
         pen.d.polygon(pen.pts([(x + 3.5, base - 7.5), (x + 7, base - 4), (x + 5, base - 4),
                                (x + 5, base - 0.5), (x + 2, base - 0.5), (x + 2, base - 4),
-                               (x, base - 4)]), outline=INK, width=pen.w(0.8))
+                               (x, base - 4)]), outline=pen.ink, width=pen.w(0.8))
     else:
         pen.text(x, base, extra, LETTER_SIZE)
 
@@ -252,28 +262,29 @@ def extra_glyph(pen, extra, x, base):
 def asterisk(pen, cx, cy, r):
     for angle in (90, 30, 150):
         dx, dy = r * math.cos(math.radians(angle)), r * math.sin(math.radians(angle))
-        pen.line([(cx - dx, cy - dy), (cx + dx, cy + dy)], INK, 1.2)
+        pen.line([(cx - dx, cy - dy), (cx + dx, cy + dy)], pen.ink, 1.2)
 
 
 def handset(pen, cx, cy):
     """The call symbol: a phone handset, opening downwards."""
-    pen.arc((cx - 8, cy - 4, cx + 8, cy + 8), 200, 340, INK, 1.4)
+    pen.arc((cx - 8, cy - 4, cx + 8, cy + 8), 200, 340, pen.ink, 1.4)
     for side in (-1, 1):
         x, y = cx + side * 7.5, cy + 1.8
-        pen.line([(x, y), (x + side * 1.2, y + 2.6)], INK, 2.2)
+        pen.line([(x, y), (x + side * 1.2, y + 2.6)], pen.ink, 2.2)
 
 
 def end_icon(pen, cx, cy):
     handset(pen, cx, cy)
-    pen.line([(cx - 8.5, cy + 4.6), (cx + 8.5, cy + 4.6)], INK, 1.2)
+    pen.line([(cx - 8.5, cy + 4.6), (cx + 8.5, cy + 4.6)], pen.ink, 1.2)
     # a power symbol inside
-    pen.arc((cx - 2.2, cy - 0.6, cx + 2.2, cy + 3.8), -50, 230, INK, 0.8)
-    pen.line([(cx, cy - 1.2), (cx, cy + 1.2)], INK, 0.8)
+    pen.arc((cx - 2.2, cy - 0.6, cx + 2.2, cy + 3.8), -50, 230, pen.ink, 0.8)
+    pen.line([(cx, cy - 1.2), (cx, cy + 1.2)], pen.ink, 0.8)
 
 
 class Phone:
-    """The phone at `scale` window pixels per LCD pixel: its image, where
-    the screen goes, which key is under a point, and each key lit up."""
+    """The phone at `scale` window pixels per LCD pixel: its image with the
+    keypad backlight off and on, where the screen goes, which key is under
+    a point, each key lit up, and the torch's glow."""
 
     def __init__(self, scale):
         self.scale = scale
@@ -283,13 +294,19 @@ class Phone:
 
         big = (self.size[0] * SS, self.size[1] * SS)
         k = scale * SS
-        phone = Image.new("RGBA", big)
-        draw_body(Pen(phone, k))
-        draw_keys(Pen(phone, k), lit=False)
-        lit = phone.copy()
-        draw_keys(Pen(lit, k), lit=True)
-        phone = phone.resize(self.size, Image.BOX)
-        lit = lit.resize(self.size, Image.BOX)
+        body = Image.new("RGBA", big)
+        draw_body(Pen(body, k))
+        layers = []
+        for lit, ink in ((False, UNLIT_INK), (False, INK), (True, INK)):
+            img = body.copy()
+            draw_keys(Pen(img, k, ink), lit)
+            layers.append(img.resize(self.size, Image.BOX))
+        phone, glowing, lit = layers
+        # backlit labels bleed light around them
+        halo = ImageChops.difference(glowing, phone).convert("L").point(lambda v: 255 if v else 0)
+        halo = halo.filter(ImageFilter.GaussianBlur(1.5 * scale)).point(lambda v: v // 2)
+        glowing.paste(HALO, mask=halo)
+        lit.paste(HALO, mask=halo)
 
         # the shadow, from the body's outline
         shadow = Image.new("L", self.size)
@@ -298,6 +315,7 @@ class Phone:
         ground = Image.new("RGBA", self.size, BG)
         ground.paste("#000000", mask=shadow)
         self.image = Image.alpha_composite(ground, phone).convert("RGB")
+        self.image_glowing = Image.alpha_composite(ground, glowing).convert("RGB")
         lit = Image.alpha_composite(ground, lit).convert("RGB")
 
         # a map of which key is where, one shade per key
@@ -319,6 +337,16 @@ class Phone:
             over = lit.crop(box).convert("RGBA")
             over.putalpha(mask.resize(over.size, Image.BOX))
             self.lit[name] = (box[:2], over)
+
+        # the torch lit: a glow around the lens, cut off by the window's top
+        cx, cy = ((MARGIN + v) * scale for v in TORCH_AT)
+        rx, ry = round(48 * scale), round(30 * scale)
+        falloff = Image.radial_gradient("L").resize((2 * rx, 2 * ry), Image.BILINEAR)
+        glow = Image.new("RGBA", falloff.size, TORCH_LIGHT)
+        # the gradient reads about 180 at the middle of each edge
+        glow.putalpha(falloff.point(lambda v: round(255 * max(0, 1 - v / 180) ** 1.6)))
+        top = round(cy) - ry
+        self.torch = ((round(cx) - rx, max(0, top)), glow.crop((0, max(0, -top), *glow.size)))
 
     def key_at(self, x, y):
         """The phone key under window pixel x, y, or None."""
