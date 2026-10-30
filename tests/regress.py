@@ -55,10 +55,10 @@ EMU_ARGS = ["--lcd-id", "0x7c89f0", "--start", "flash", "--power-key-ms", "8000"
             "--poll-limit", "40000000"]
 
 # Each scenario: RTC time at power-on, emulated length, keys (MS:KEY[:HOLD]),
-# other emu.py options, how the run ends if not by using up its time, and
-# checks: (log line
-# pattern, from ms, to ms) that must appear in that window, and
-# ("loud" | "quiet", from ms, to ms) for the sound.
+# extra emulator options, how the run ends if not by using up its time, and
+# checks: (log line pattern, from ms, to ms) that must appear in that window
+# ("fm: pattern" searches out/fm.log instead), and ("loud" | "quiet", from
+# ms, to ms) for the sound.
 SCENARIOS = {
     "tour": dict(
         about="boot, then the main menu, Messages, Calendar and back home",
@@ -96,6 +96,18 @@ SCENARIOS = {
         about="a flat battery (3.4 V): the phone warns and switches itself off",
         rtc="2026-10-29T09:00:05", ms=30000, keys="", args=["--battery-mv", "3400"],
         stop="powered off", checks=[("power off", 18000, 24000)]),
+    "fm": dict(
+        about="Radio with the headset in: opens on 95.8 MHz, Auto tuning finds and saves "
+              "the synthetic band's seven stations, the Channels list",
+        rtc="2026-10-27T10:09:00", ms=50000, args=["--headset"],
+        keys="15000:rsoft,19000:lsoft,20500:down,22000:down,23500:down,25000:select,"
+             "32000:select,36000:lsoft,37500:down,39000:down,40500:down,42000:down,"
+             "43500:down,45000:select,47000:down,48500:down",
+        checks=[("fm: tune 95.80 MHz: station -55 dBm stereo", 15000, 16000),
+                ("fm: irq 44 raised", 15000, 16000), ("fm: irq 44 lowered", 15000, 16000),
+                ("fm: seek up from 87.50 MHz: 7 channels, found 88.10 MHz", 25000, 26000),
+                ("fm: seek up from 107.70 MHz: 11 channels, found 88.10 MHz", 26000, 28000),
+                ("fm: tune 88.10 MHz: station -62 dBm stereo", 32000, 33000)]),
 }
 
 
@@ -113,6 +125,7 @@ class Run:
         self.sound_start = ms   # emulated ms of the recording's first sample
         self.failure = None     # why the emulator stopped early, if it did
         self.stop = None        # the emulator's "stop: ..." line
+        self.fm_events = []     # (block, text) from out/fm.log; checked, not compared
 
     @classmethod
     def from_output(cls, folder, ms, stop):
@@ -129,6 +142,11 @@ class Run:
             run.failure = f"the emulator stopped early: {last.strip()} (see {(folder / 'run.log').relative_to(ROOT)})"
         for path in sorted((folder / "frames").glob("*.png")):
             run.frames[path.name] = pixels_hash(path)
+        fm_log = folder / "fm.log"
+        if fm_log.exists():
+            for line in fm_log.read_text().splitlines():
+                block, text = line.split(None, 1)
+                run.fm_events.append((int(block), text))
         wav = folder / "audio.wav"
         if wav.exists():
             with wave.open(str(wav)) as w:
@@ -200,9 +218,11 @@ def check(run, checks):
             peak = run.peak(lo, hi)
             if (peak < LOUD) if what == "loud" else (peak > QUIET):
                 yield f"sound should be {what} from {seconds(lo)} to {seconds(hi)} (peak {peak})"
-        elif not any(lo <= block // BLOCKS_PER_MS <= hi and re.search(what, text)
-                     for block, text in run.events):
-            yield f"no {what!r} between {seconds(lo)} and {seconds(hi)}"
+        else:
+            pattern, events = (what[4:], run.fm_events) if what.startswith("fm: ") else (what, run.events)
+            if not any(lo <= block // BLOCKS_PER_MS <= hi and re.search(pattern, text)
+                       for block, text in events):
+                yield f"no {what!r} between {seconds(lo)} and {seconds(hi)}"
 
 
 def compare(new, ref):
