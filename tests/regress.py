@@ -18,6 +18,15 @@ The reference lives in tests/reference/ and is not committed, because it
 is made from your firmware. Record it with --update on a version you
 trust, e.g. right after checking out a release; --update refuses to record
 a run that fails the checks.
+
+The scenarios and EMU_ARGS are for the dump in this checkout, a TA-1557
+(see dump/README.txt): no boot ROM dump yet, so it starts from flash; its
+own panel ID; and the power key held past its 5.3 s USB-tool wait, as
+nokia105/bin/emu.ysh runs it. Its home screen comes about 6 s later than
+the TA-1423's, its right soft key opens Radio, its alarm is stopped with
+the centre key, and it locks the keypad after a while, so the key scripts
+differ from the TA-1423 ones they were adapted from (git show 17314dc).
+Its torch is not GPIO 0 pin 0 (lights.py), so there is no torch check.
 """
 import argparse
 import concurrent.futures
@@ -41,6 +50,10 @@ BLOCKS_PER_MS = 4000
 PEAK_MS = 100               # sound is compared as peaks over windows this long
 LOUD, QUIET = 2000, 200     # peak levels for the sound checks
 
+# Options every run gets: what this checkout's dump needs (see above).
+EMU_ARGS = ["--lcd-id", "0x7c89f0", "--start", "flash", "--power-key-ms", "8000",
+            "--poll-limit", "40000000"]
+
 # Each scenario: RTC time at power-on, emulated length, keys (MS:KEY[:HOLD]),
 # other emu.py options, how the run ends if not by using up its time, and
 # checks: (log line
@@ -49,28 +62,29 @@ LOUD, QUIET = 2000, 200     # peak levels for the sound checks
 SCENARIOS = {
     "tour": dict(
         about="boot, then the main menu, Messages, Calendar and back home",
-        rtc="2026-10-27T10:09:00", ms=40000,
-        keys="10000:select,12500:select,15000:down,17500:rsoft,20000:down,22500:right,"
-             "25000:select,28000:rsoft,30500:down,33000:end",
-        checks=[("backlight on", 0, 2000), ("keypad light on", 0, 3000),
-                # the dump is in the Silent profile
-                ("quiet", 0, 40000)]),
+        rtc="2026-10-27T10:09:00", ms=46000,
+        keys="16000:select,18500:select,21000:down,23500:rsoft,26000:down,28500:right,"
+             "31000:select,34000:rsoft,36500:down,39000:end",
+        checks=[("backlight on", 6000, 7000), ("keypad light on", 7000, 8000),
+                # the dump is in a silent profile
+                ("quiet", 0, 46000)]),
     "day": dict(
-        about="General profile, Alarm1 set for 09:01, backlight timeout, the alarm "
-              "rung and stopped, the torch on and off",
+        about="General profile, Alarm1 set for 09:01, keypad light timeout, the alarm "
+              "rung and stopped, backlight timeout",
         rtc="2026-10-29T08:59:35", ms=112000,
-        keys="10000:select,11500:down,13000:down,14500:left,16000:select,17500:down,"
-             "19000:down,20500:select,22500:up,24000:select,25500:select,28000:end,"
-             "30000:rsoft,31500:select,33000:select,35000:right,36500:down,38000:lsoft,"
-             "40000:select,43000:select,46000:end,100000:lsoft,105000:up,105300:up,108000:up",
-        checks=[("keypad light off", 50000, 60000), ("backlight off", 50000, 60000),
-                ("rtc: alarm 2026-10-29 09:01:00", 84900, 85100), ("backlight on", 85000, 86000),
+        keys="16000:select,17500:down,19000:down,20500:left,22000:select,23500:down,"
+             "25000:down,26500:select,28500:up,30000:select,31500:select,34000:end,"
+             "36000:select,37500:up,39000:right,40500:select,42500:select,44500:select,"
+             "46000:right,47500:down,49000:select,52000:end,54000:up,54300:up,57000:up,"
+             "100000:select",
+        checks=[("keypad light off", 66000, 68000),
+                ("rtc: alarm 2026-10-29 09:01:00", 84900, 85100), ("keypad light on", 85000, 86000),
                 ("loud", 85500, 99500), ("quiet", 101000, 112000),
-                ("torch on", 105000, 106000), ("torch off", 108000, 109000)]),
+                ("backlight off", 110000, 111000)]),
     "power": dict(
         about="holding the red key on the home screen switches the phone off",
-        rtc="2026-10-29T09:00:05", ms=20000, keys="10000:end:4000", stop="powered off",
-        checks=[("backlight off", 12000, 14000), ("power off", 13000, 15000)]),
+        rtc="2026-10-29T09:00:05", ms=26000, keys="16000:end:4000", stop="powered off",
+        checks=[("backlight off", 19000, 20000), ("power off", 19500, 20500)]),
     "charge": dict(
         about="the charger plugged in at 4.1 V, charging to full, then unplugged",
         rtc="2026-10-29T09:00:05", ms=60000, keys="12000:charger:40000",
@@ -241,7 +255,7 @@ def run_scenario(name):
     folder = OUT / name
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    cmd = [sys.executable, "-I", str(ROOT / "emu.py"), "--rtc-time", sc["rtc"],
+    cmd = [sys.executable, "-I", str(ROOT / "emu.py"), *EMU_ARGS, "--rtc-time", sc["rtc"],
            "--max-blocks", str(sc["ms"] * BLOCKS_PER_MS), "--keys", sc["keys"], "--out", str(folder),
            *sc.get("args", [])]
     start = time.monotonic()
