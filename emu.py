@@ -36,6 +36,7 @@ import audio  # noqa: E402
 import battery  # noqa: E402
 import dsp  # noqa: E402
 import eic  # noqa: E402
+import fm  # noqa: E402
 import irq  # noqa: E402
 import jpeg_hw  # noqa: E402
 import keypad  # noqa: E402
@@ -213,17 +214,7 @@ READ_HANDLERS = {
     # timeouts raise errors 0xeaea0002/0xeaea0001. Purpose unknown.
     0x8b000278: lambda m: (m.regs.get(0x8b000278, 0) & ~(0x1f << 10)) | (
         7 << 10 if m.regs.get(0x8b000274, 0) & (1 << 25) else 0),
-    # unidentified block at 0x88002000, perhaps the radio baseband ADC used
-    # for power-up calibration: started through
-    # 0x88002134, it signals done in 0x880020e0 (bit 28 for the 0x30 mode,
-    # kern 0x40184ae, result byte in 0x880020d0; bit 24 for the 0x100 mode,
-    # kern 0x40188dc, 12-bit result in bits 0-11). Results are left at 0.
-    0x880020e0: lambda m: m.regs.get(0x880020e0, 0) | 1 << 28 | 1 << 24,
-    # same block, kern 0x40191fc: waits for bit 0 of 0x88002038 after a start
-    0x88002038: lambda m: m.regs.get(0x88002038, 0) | 1,
-    # same block, kern 0x401925c: waits for bit 16 of 0x880020cc, then reads
-    # signed 16-bit pairs (I/Q offsets?) from 0x880020d8/0x880020dc (left 0)
-    0x880020cc: lambda m: m.regs.get(0x880020cc, 0) | 1 << 16,
+    # the FM receiver at 0x88002000 and its RF port: fm.py (fm.install)
     dsp.SHARED_CMD: lambda m: m.dsp.read_shared_cmd(),  # see dsp.py
     # control register of the JPEG decoder (jpeg_hw.py): the MMI (user
     # 0x82817a2) writes 0x19 to 0x20200000 and waits for bit 7 = done;
@@ -399,6 +390,8 @@ class Machine:
         # the power key is let go after --power-key-ms: the EIC sees the change
         self.schedule(args.power_key_ms * BLOCKS_PER_MS, self.pmic.update)
         self.eic = eic.DigitalEic(self, args.headset)
+        self.fm = fm.FmReceiver(self, args.out / "fm.log")
+        fm.install(self, READ_HANDLERS, WRITE_HANDLERS)
         self.vbc = audio.Vbc(self, args.out / "audio.wav")
         self.dma = audio.Dma(self, self.vbc)
         self.aud = audio.AudCtl(self)
@@ -1017,6 +1010,7 @@ class Machine:
         self.errors.close()
         self.lcd_log.close()
         self.g2d_log.close()
+        self.fm.close()
         self.vbc.close()
         self.panel.save_png(self.args.out / "screen.png")
         self.report()
@@ -1089,7 +1083,7 @@ class Machine:
                    f"dsp interrupts {self.dsp.interrupts}; rtc events {self.pmic.rtc_events}; "
                    f"wfi sleeps {self.wfi_count} ({self.wfi_blocks // BLOCKS_PER_MS} ms skipped); "
                    f"key presses {self.keypad.presses}; audio: {self.dma.blocks} DMA blocks, "
-                   f"{self.vbc.samples} samples")
+                   f"{self.vbc.samples} samples; {self.fm.report()}")
         out.append(f"mmu: sctlr={arm_exc.cp15(uc, 1):08x} ttbr={arm_exc.cp15(uc, 2):08x} "
                    f"dacr={arm_exc.cp15(uc, 3):08x}; exceptions delivered: {self.exc.counts}")
         out.append("code at pc:")
