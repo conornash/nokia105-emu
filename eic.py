@@ -16,7 +16,8 @@ Inputs, from the kernel's input table (RAM 0x430a060, 16 bytes per id:
 id, type 2 = EIC, active level at +8, line at +0xa):
   line 1  headset detect (input id 0x11), active low: low = plugged in
           (kern 0x4000996 sets the state the status bar shows, 0x430a620)
-Other lines read 0.
+Other lines read 0. The TA-1557 never reads this EIC: its headset detect is
+PMIC EIC line 4 (Machine.eic_inputs), which follows the same plug state.
 """
 EIC_BASE = 0x8a001000
 DATA, DMSK, IEV, IE, RIS, MIS, IC = 0x00, 0x04, 0x14, 0x18, 0x1c, 0x20, 0x24
@@ -51,3 +52,4 @@ class DigitalEic:
     def set_headset(self, plugged):
         self.headset = plugged
         self.update()
+        self.m.pmic.update()    # the TA-1557's headset is PMIC EIC line 4

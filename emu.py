@@ -261,6 +261,7 @@ EIC_POWER_KEY = 1 << 1
 POWERED_OFF = "powered off"     # stop reason when the phone switches itself off
 SWITCHES = ("charger", "headset")   # --keys names that plug something in
 EIC_BATTERY = 1 << 8  # inferred, see Machine.eic_inputs
+EIC_HEADSET = 1 << 4  # TA-1557 headset detect, see Machine.eic_inputs
 
 # ADC results are keyed by the channel register's low 7 bits (channel in
 # bits 0-4, bit 5 set by adc_read's scale argument 0, bit 6 always set as
@@ -745,8 +746,13 @@ class Machine:
         keypad_read_pb; the power-on reason check at flash 0x1f0c6 reads it).
         Bit 8 is kernel input 0x18: a normal boot powers off if it reads 0
         (kern 0x4000b5a), so it is taken to be battery detect. Bit 0 is the
-        charger (battery.py)."""
+        charger (battery.py). Bit 4 is the TA-1557's headset detect, high
+        when plugged in: with it set the status bar shows the headset icon
+        and Radio stops asking for one. (That phone never reads the digital
+        EIC, where the TA-1423 has its headset, eic.py; --headset sets both.)"""
         bits = 0
+        if self.eic.headset:
+            bits |= EIC_HEADSET
         if self.power_key_held() or self.keypad.power_held:
             bits |= EIC_POWER_KEY
         if self.battery.plugged:

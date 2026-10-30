@@ -18,8 +18,8 @@ Days count from 2000-01-01 (the firmware's default time is day 0x20d1,
 default.
 
 The EIC (external interrupt controller) at 0x82001200 turns input lines
-into interrupts: bit 1 is the power key, bit 8 battery detect (see
-Machine.eic_inputs). Its handler (irq 69, kern 0x403e4b0) checks +0x20
+into interrupts: bit 1 is the power key, bit 4 the TA-1557's headset
+detect, bit 8 battery detect (see Machine.eic_inputs). Its handler (irq 69, kern 0x403e4b0) checks +0x20
 per channel, acknowledges, and calls the channel's callback with the
 level from +0x00 (kern 0x403e2b2/0x403e26c). Channels are taken to be
 level-triggered: pending while enabled (+0x18) and level == polarity
