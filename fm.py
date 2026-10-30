@@ -408,13 +408,13 @@ class FmReceiver:
         return f"fm: {self.tunes} tunes, {self.seeks} seeks, {self.interrupts} interrupts"
 
 
-def install(machine, read_handlers, write_handlers):
-    fm = machine.fm
+def install(read_handlers, write_handlers):
+    """Route the block, the RF port and the clock/reset bits to m.fm."""
     for off in range(0, FM_SIZE, 4):
-        read_handlers[FM_BASE + off] = lambda m, o=off: fm.read(o)
+        read_handlers[FM_BASE + off] = lambda m, o=off: m.fm.read(o)
         write_handlers[FM_BASE + off] = (
-            lambda m, v, o=off: m.regs.__setitem__(FM_BASE + o, fm.write(o, v)))
-    read_handlers[RF_PORT] = lambda m: fm.read_rf()
-    write_handlers[RF_PORT] = lambda m, v: fm.write_rf(v)
-    write_handlers[APB_EB0] = lambda m, v: fm.on_clock(v)
-    write_handlers[APB_RST0] = lambda m, v: fm.on_reset(v)
+            lambda m, v, o=off: m.regs.__setitem__(FM_BASE + o, m.fm.write(o, v)))
+    read_handlers[RF_PORT] = lambda m: m.fm.read_rf()
+    write_handlers[RF_PORT] = lambda m, v: m.fm.write_rf(v)
+    write_handlers[APB_EB0] = lambda m, v: m.fm.on_clock(v)
+    write_handlers[APB_RST0] = lambda m, v: m.fm.on_reset(v)

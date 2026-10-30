@@ -214,7 +214,7 @@ READ_HANDLERS = {
     # timeouts raise errors 0xeaea0002/0xeaea0001. Purpose unknown.
     0x8b000278: lambda m: (m.regs.get(0x8b000278, 0) & ~(0x1f << 10)) | (
         7 << 10 if m.regs.get(0x8b000274, 0) & (1 << 25) else 0),
-    # the FM receiver at 0x88002000 and its RF port: fm.py (fm.install)
+    # the FM receiver at 0x88002000 and its RF port: fm.py (installed below)
     dsp.SHARED_CMD: lambda m: m.dsp.read_shared_cmd(),  # see dsp.py
     # control register of the JPEG decoder (jpeg_hw.py): the MMI (user
     # 0x82817a2) writes 0x19 to 0x20200000 and waits for bit 7 = done;
@@ -337,6 +337,7 @@ for _ch in range(audio.CHANNELS):
     READ_HANDLERS[_base + audio.INTC] = lambda m, ch=_ch: m.dma.read_intc(ch)
     WRITE_HANDLERS[_base + audio.CFG] = lambda m, v, ch=_ch: m.dma.on_cfg(ch, v)
     WRITE_HANDLERS[_base + audio.INTC] = lambda m, v, ch=_ch: m.dma.on_intc(ch, v)
+fm.install(READ_HANDLERS, WRITE_HANDLERS)
 for _i, _base in enumerate(irq.TIMER_BASES):
     READ_HANDLERS[_base + irq.VALUE] = lambda m, i=_i: m.timers[i].value()
     READ_HANDLERS[_base + irq.INT] = lambda m, i=_i: m.timers[i].read_int()
@@ -391,7 +392,6 @@ class Machine:
         self.schedule(args.power_key_ms * BLOCKS_PER_MS, self.pmic.update)
         self.eic = eic.DigitalEic(self, args.headset)
         self.fm = fm.FmReceiver(self, args.out / "fm.log")
-        fm.install(self, READ_HANDLERS, WRITE_HANDLERS)
         self.vbc = audio.Vbc(self, args.out / "audio.wav")
         self.dma = audio.Dma(self, self.vbc)
         self.aud = audio.AudCtl(self)
