@@ -13,8 +13,9 @@ chip's peripherals are reimplemented in Python from what the firmware
 expects of them: interrupt controller, timers, SPI flash, hardware LZMA,
 LCD controller and panel, the JPEG decoder and colour converter, keypad,
 the PMIC (RTC and alarm, ADC, charger, external interrupts, audio codec,
-backlight LEDs), eFuse, GPIO, the DMA controller and voice-band codec that play sound, and
-enough of the DSP mailbox to get past start-up.
+backlight LEDs), eFuse, GPIO, the DMA controller and voice-band codec that play sound, the
+FM receiver (with a synthetic band to tune to), and enough of the DSP
+mailbox to get past start-up.
 
 **No firmware is included.** You need to dump your own phone; see
 [docs/DUMPING.md](docs/DUMPING.md).
@@ -75,10 +76,17 @@ Works:
   `--slow-boot` shows the boot at the phone's pace.
 - Headless runs several times faster than real time (boot to the home
   screen in under 2 s).
+- FM radio, without sound: the receiver is modelled (`fm.py`) with a
+  synthetic band of eight stations, so the Radio app opens on its saved
+  station, steps through saved channels and manual tuning, and Auto tuning
+  finds and saves the seven strong enough to stop a seek. Plug a headset
+  in first (`--headset` or `h`): it is the antenna. `out/fm.log` records
+  every tune, seek and interrupt.
 
 Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
-- Call audio and FM radio are silent.
+- Call audio and FM radio are silent: the FM receiver tunes but produces
+  no audio, and the Radio app has no signal meter to show.
 - No camera or USB. Started by the charger, the phone first waits 15 s
   for a PC on its USB port before it shows the charging screen.
 - No vibration. The phone's own vibrator test only powers the audio path up
@@ -140,7 +148,7 @@ same options and saves every new screen to `out/frames/`.
 |---|---|
 | `--dump DIR` | directory with `flash.bin` and `bootrom.bin` (default `$NOKIA_DUMP`, `./dump` or `../dump`) |
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
-| `--headset` | boot with a headset plugged in |
+| `--headset` | boot with a headset plugged in (the FM antenna; the TA-1557 sees it on PMIC EIC line 4) |
 | `--sim`, `--sim-slot N` | insert a test 2G SIM card (`sim.py`) in slot N (0 = SIM1); every command it gets is logged to `out/sim.log`. Without `--sim` the phone has no SIM, as before |
 | `--mute` | don't play sound in the live window (still saved to `out/audio.wav`) |
 | `--fresh` | live window: start again from the dump (the previous `state/flash.bin` is kept as `.old`) |
@@ -170,9 +178,10 @@ counts and every peripheral register touched; `out/psram.bin` and
 
 `make test` runs scripted sessions headless and checks them against a
 reference recorded earlier from your dump: the boot and a menu tour; an
-alarm set, rung and stopped, with the backlight timing out and the torch;
-switching off; charging to full; and a flat battery switching the phone
-off. Emulation is deterministic, so every log line, screen
+alarm set, rung and stopped, with the lights timing out; switching off;
+charging to full; a flat battery switching the phone off; and the Radio
+app with Auto tuning. It then drives the FM receiver's registers
+directly, as a driver would (`tests/fm_protocol.py`). Emulation is deterministic, so every log line, screen
 and sound sample has to match; a difference is reported with the first
 log line, screen and moment of sound that changed, and the changed screen
 is saved next to the reference one in `out/test/`. The runs take a few
@@ -228,8 +237,10 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `lights.py` | screen and keypad backlights, torch |
 | `battery.py` | battery, charger, and the eFuse calibration the ADC needs |
 | `dsp.py` | DSP mailbox stub |
+| `fm.py` | FM receiver, its RF registers, and the synthetic band |
 | `disasm.py`, `mkelf.py` | helpers: disassemble a range; wrap a raw image as an ELF for Ghidra |
 | `tests/regress.py` | `make test`: scripted runs checked against a recorded reference |
+| `tests/fm_protocol.py` | `make test`: the FM receiver's registers, driven as a driver would |
 | `third_party/lzmadec.h` | LZMA decoder from spreadtrum_flash (public domain) |
 
 ## Credits

@@ -52,6 +52,7 @@ faulting address (the engine's windowed mode).
 | GPIO (torch) | `0x8a000000` | | `lights.py` |
 | eFuse (ADC calibration) | `0x82002000` | | `battery.py` |
 | Voice-band codec (DAC FIFOs) | `0x82003000` | | `audio.py` |
+| FM receiver, RF port | `0x88002000`, `0x8d000000` | 44 | `fm.py` |
 
 Interrupt controller banks: `+0x00` masked status, `+0x04` raw, `+0x08`
 enable (write 1 to set), `+0x0c` disable, `+0x2c` FIQ disable (*inferred*:
@@ -91,12 +92,16 @@ Reads go through the ADI: write the register offset to `0x82000008`, read
   resets the clock to 2023-01-01 (flash `0x1727c`).
 - EIC `0x82001200`: data `+0x00`, polarity `+0x14`, enable `+0x18`, raw
   `+0x1c`, masked `+0x20`. Inputs: bit 0 = charger, bit 1 = power key
-  (pressed = 1), bit 8 = battery present.
+  (pressed = 1), bit 8 = battery present, and on the TA-1557 bit 4 =
+  headset (plugged in = 1; with it set the status bar shows the headset
+  icon and Radio stops asking for one).
 
 ### Digital EIC (`0x8a001000`)
 
 Same layout as the PMIC EIC, plus `+0x04` data mask, `+0x24` clear and
 `+0x28` re-arm. Input 1 is headset detect, active low (low = plugged in).
+The TA-1557 never reads this EIC; its headset is PMIC EIC bit 4, and
+`--headset` drives both.
 The kernel's input table (RAM `0x430a060`, 16 bytes per logical input:
 id, type, active level, line, callback) maps logical inputs to EIC lines;
 the line numbering is the controller list at flash `0x2d108`
@@ -231,6 +236,59 @@ The factory menu's vibrator test switches the audio path on and off once a
 second (the same PMIC and AUD writes as any sound) and writes the codec
 registers `0x82003088`..`ac`, but nothing else; with Vibrating alert on,
 the alarm does not even do that. No vibration motor control was found.
+
+### FM receiver (`0x88002000`, RF port `0x8d000000`)
+
+Read from the TA-1557's kernel driver (kern `0x040172b2`..`0x040191bc`);
+register names are those of the 2013 Mocor `fm_reg_v0.h`, an earlier FM
+block with the same layout up to `+0xd0`.
+
+Clock is APB_EB0 (`0x8b0000a8`) bit 29, reset APB_RST0 (`0x8b000068`) bit
+23: the Radio app's power-up (kern `0x0401740c`) sets the clock, pulses the
+reset, programs the RF part and sets RF `0x44` bits 15:12 to 5; its
+power-down (kern `0x04017b72`) sets them to 0, clears bit 29 and disables
+line 44. While the clock is off or reset is held the block's registers
+read 0 and drop writes (the app reads the whole block once that way, kern
+`0x04017388`, and discards it); reset clears them.
+
+The RF part is a set of 16-bit registers behind one word: write `(reg <<
+16) | value`, or write `(reg << 16) | 0x80000000` and read back `(reg <<
+16) | value`. Every stock write is read back and compared (kern
+`0x0401732c`).
+
+A tune or seek starts when `+0x04` bit 31 goes from 0 to 1, with `+0x18`
+= 2 (tune) or 1 (seek) and the channel in `+0x0c` bits 16:0, in kHz
+(bits 31:20 are a per-mode constant that goes with `+0x120`). The band is
+`+0x1c` bits 16:0 to `+0x20` bits 16:0, in steps of `+0x20` bits 31:24
+kHz (stock 87500, 108000, 100: *inferred* from the init table at RAM
+`0x0430bd48`). A seek examines at most `+0x14` channels (stock 20) from
+the start, in the direction of `+0x00` bit 19, wrapping at the band edges.
+When the job is done `+0x38` bit 0 is set, and line 44 is that bit ANDed
+with `+0x30` bit 0. The driver arms `+0x30`, sets bit 31 and spins until
+its handler (kern `0x04017354`) has seen the interrupt (kern `0x040176b8`,
+no timeout); the handler takes `!(+0xb0 bit 16)` as the result and writes
+`+0x30 &= 0xe`, which drops the line, then `+0x34 |= 1`, which clears
+`+0x38`. The boot-time calibration (kern `0x04018fea`) does a tune too,
+but polls `+0x38` with the interrupt still disabled at the INTC.
+
+Results: `+0xb8` channel being received (kHz), `+0xac` channels the seek
+examined, `+0xb0` RSSI in bits 7:0 (dBm), failed in bit 16, stereo in bit
+17, `+0xc0` input power in bits 8:0 (dBm, 9-bit; the driver reports 512 −
+it as the signal), `+0xd0` wideband RSSI. The stock seek (kern
+`0x04017e78`) retries up to four times from where the last one stopped,
+and its band scan, Auto tuning (kern `0x040178de`), seeks up until `+0xb8`
+goes down.
+
+The emulator completes a tune at once and a seek 5 ms per channel
+examined (real times unknown), and puts a synthetic band in front of the
+receiver: 88.1, 91.3, 95.8, 98.0, 100.4, 102.7, 104.9 and 107.6 MHz, at
+−55 to −88 dBm on a −110 dBm floor (table in `fm.py`). A seek stops on
+−85 dBm or better, so Auto tuning finds seven; what `+0x40` (SEEK_CH_TH,
+stock 3000) measures is unknown and it is not used. Stations are heard only
+with the headset (the antenna) in and the RF part powered. Every power,
+tune, seek and interrupt change goes to `out/fm.log`. There is no FM audio,
+and the Radio app shows no signal meter: it never calls the driver's level
+getters (kern `0x04018044`..`0x040180ba`).
 
 ### DSP
 
