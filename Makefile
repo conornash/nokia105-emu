@@ -15,9 +15,11 @@ libblockclock.$(EXT): blockclock.c
 	$(CC) -O2 -shared -fPIC -o $@ blockclock.c
 
 # headless scenarios compared with a reference recorded from your dump
-# (tests/regress.py); test-update records that reference
+# (tests/regress.py), then the FM receiver's register protocol
+# (tests/fm_protocol.py); test-update records the reference
 test: all
 	.venv/bin/python -I tests/regress.py
+	.venv/bin/python -I tests/fm_protocol.py
 
 test-update: all
 	.venv/bin/python -I tests/regress.py --update
