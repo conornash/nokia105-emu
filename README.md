@@ -64,9 +64,15 @@ Works:
   of seconds after each change and again when the window closes, whether by
   the close button, Cmd+Q or Ctrl+C in the terminal, so even a crash loses
   at most the last change.
-- A live window that runs at the phone's real speed: home screen about
-  7.5 s after launch, menus open instantly. It shows the screen in a
-  drawing of the phone whose keys you can click.
+- A live window that runs at the phone's real speed, menus open
+  instantly. It shows the screen in a drawing of the phone whose keys you
+  can click.
+- A fast start: the window runs the boot ahead of real time, skipping the
+  phone's waits but playing the start-up tune at its own pace, and then
+  sets the phone's clock back to the real time. The home screen appears
+  about 2 s after launch (3 s with the start-up tune) instead of the
+  phone's own 7.5 s; switching on and charging mode start as fast.
+  `--slow-boot` shows the boot at the phone's pace.
 - Headless runs several times faster than real time (boot to the home
   screen in under 2 s).
 
@@ -98,7 +104,9 @@ mkdir dump                    # put flash.bin and bootrom.bin here
 ./run.sh                      # opens the live window
 ```
 
-The phone takes about 7.5 s to reach the home screen, as on real hardware.
+The home screen appears within a few seconds: the window runs the boot
+ahead of real time (`--slow-boot` shows it at the phone's own pace, about
+7.5 s).
 
 <p align="center"><img src="docs/screenshots/window.png" alt="The live window: the home screen inside a drawing of the phone" width="232"></p>
 
@@ -138,6 +146,7 @@ same options and saves every new screen to `out/frames/`.
 | `--state FILE` | keep the phone's flash in FILE (the live window uses `state/flash.bin`; headless runs start from the dump unless given this) |
 | `--scale N` | window pixels per LCD pixel (`live.py`; default: the largest up to 3 that fits the screen, in steps of 0.25) |
 | `--no-skin` | show only the screen, without the phone around it (`live.py`) |
+| `--slow-boot` | boot at the phone's own pace instead of skipping its waits (`live.py`) |
 | `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down`; `charger` and `headset` plug in for HOLD ms, e.g. `12000:charger:60000` |
 | `--max-blocks N` | stop after N translation blocks (4000 blocks = 1 ms) |
 | `--battery-mv MV` | battery voltage at power-on (default: as the saved phone left it, else 3900) |
@@ -182,7 +191,9 @@ what the phone does.
   the system's millisecond and 32 kHz counters current in memory, so the
   firmware's delay loops run at native speed. When the firmware executes
   wait-for-interrupt, the emulator skips ahead to the next event; in the
-  live window it is paced to the wall clock instead.
+  live window it is paced to the wall clock instead, except during the
+  boot while nothing audible plays, after which the RTC is set back by
+  the time skipped.
 - **Interrupts** come from the device models through the interrupt
   controller; `arm_exc.py` delivers IRQs and aborts itself, walking the
   guest's page tables for faulting addresses.

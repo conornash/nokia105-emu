@@ -95,6 +95,7 @@ class Vbc:
         self.written = 0            # frames before this index are written out
         self.pending = array("h")   # stereo frames from `written` on
         self.end = [0, 0]
+        self.loud_until = 0         # where the last non-silent samples end
         self.samples = 0            # samples received, both DACs
         self.wav = None
         self.player = None
@@ -114,8 +115,15 @@ class Vbc:
         base = 2 * (start - self.written) + ch
         self.pending[base:base + 2 * len(samples):2] = array("h", samples)
         self.end[ch] = stop
+        if any(samples):
+            self.loud_until = max(self.loud_until, stop)
         self.samples += len(samples)
         return (stop - FIFO_SAMPLES) * 1000 * self.m.blocks_per_ms // OUT_RATE
+
+    def sounding(self, margin_ms=200):
+        """Whether something audible is playing now or ended within
+        margin_ms (the gaps between notes)."""
+        return self.loud_until + margin_ms * OUT_RATE // 1000 > self.now()
 
     def on_fifo_write(self, ch, value):
         sample = value & 0xffff

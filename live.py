@@ -2,7 +2,9 @@
 """Live window for the emulator: the LCD inside a drawing of the phone.
 Clicks on the drawn keys and keyboard keys become phone key presses. While
 the phone sleeps, emulated time follows the wall clock; while it is busy it
-runs slower than real time.
+runs slower than real time. The boot runs ahead of the wall clock until
+the home screen (or a key press), except while sound plays, and the RTC is
+then set back to the real time (--slow-boot: boot at the phone's pace).
 
 usage: .venv/bin/python -I live.py [--scale N] [--no-skin] [emu.py options]
 
@@ -215,6 +217,7 @@ class Window:
         old.args.charger = old.battery.plugged if charger is None else charger
         machine = emu.Machine(old.args)
         machine.realtime = True
+        machine.fast_boot = old.args.fast_boot
         machine.vbc.live = old.vbc.live
         if key:
             machine.keypad.press(emu.keypad.POWER_KEY)
@@ -364,6 +367,8 @@ def main():
     p.add_argument("--no-skin", dest="skin", action="store_false",
                    help="show only the screen, without the phone around it")
     p.add_argument("--mute", action="store_true", help="don't play sound (it is still saved to out/audio.wav)")
+    p.add_argument("--slow-boot", dest="fast_boot", action="store_false",
+                   help="boot at the phone's own pace (about 7.5 s) instead of skipping its waits")
     p.add_argument("--fresh", action="store_true",
                    help="start from the dump, ignoring the saved phone state (it is replaced on exit)")
     args = emu.parse_args(parser=p)
@@ -377,6 +382,7 @@ def main():
         args.state.rename(args.state.with_name(args.state.name + ".old"))
     machine = emu.Machine(args)
     machine.realtime = True
+    machine.fast_boot = args.fast_boot
     machine.vbc.live = not args.mute
     Window(machine, args.scale, args.skin).run()
 

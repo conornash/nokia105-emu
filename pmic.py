@@ -114,6 +114,14 @@ class Pmic:
         self.alarm[index] = value & 0xffff
         self.schedule_alarm()
 
+    def shift(self, seconds):
+        """Move the RTC by `seconds` (the emulator's own correction, not the
+        firmware setting the time)."""
+        if seconds:
+            self.rtc_base += seconds
+            self.schedule_minute()
+            self.schedule_alarm()
+
     def clock(self):
         """The RTC's date and time now."""
         return RTC_EPOCH + datetime.timedelta(seconds=self.rtc_now())

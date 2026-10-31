@@ -75,6 +75,9 @@ STOP_DEADLINE, STOP_IRQ, STOP_SPIN = 1, 2, 4
 COUNTER_PAGE = 0x81003000
 PROGRESS_BLOCKS = 2_000_000
 PACE_BLOCKS = 10 * 4000   # real-time mode: check the wall clock every 10 ms
+# fast boot: unpaced until the boot has drawn this many screens (the third
+# is the home screen), a key press, or this much emulated time
+FAST_BOOT_SCREENS, FAST_BOOT_MAX_MS = 3, 20_000
 AUTOSAVE_MS = 2000        # --state: save this long after the flash was last written
 
 BOOTROM_SIZE = 0x16000
@@ -420,6 +423,11 @@ class Machine:
         # pace emulated time to the wall clock while the guest sleeps
         self.realtime = False
         self.wall_start = None
+        # real-time mode: run the boot unpaced while it is silent
+        self.fast_boot = False
+        self.fast_boot_input = False    # a key was pressed: the boot is over
+        self.was_pacing = False
+        self.run_start = None   # wall time the run started
         self.lcd_log = open(args.out / "lcd.log", "w")
         self.g2d_log = open(args.out / "g2d.log", "w")
         self.g2d_ops = 0
@@ -636,6 +644,8 @@ class Machine:
         self.inputs.append((action, arg))
         self.input_ready.set()
         self.clock.deadline = 0     # stop at the next block to take it
+        if action == "press":
+            self.fast_boot_input = True
 
     def take_inputs(self):
         while self.inputs:
@@ -694,6 +704,31 @@ class Machine:
             self.input_ready.wait(min(ahead / (1000 * BLOCKS_PER_MS), 0.25))
             self.input_ready.clear()
         return min(due, max(self.nblocks, self.wall_blocks()))
+
+    def pacing(self):
+        """Whether emulated time is held to the wall clock now: in real-time
+        mode, except during a fast boot while no sound is playing (sound
+        has to play at its own pace). Each return to pacing starts the wall
+        clock from here, so that time skipped is not waited for."""
+        if not self.realtime:
+            return False
+        if self.fast_boot and (self.fast_boot_input or self.lcdc.refreshes >= FAST_BOOT_SCREENS
+                or self.nblocks >= FAST_BOOT_MAX_MS * BLOCKS_PER_MS):
+            self.end_fast_boot()
+        pacing = not self.fast_boot or self.vbc.sounding()
+        if pacing and not self.was_pacing:
+            self.wall_start = time.monotonic() - self.nblocks / (1000 * BLOCKS_PER_MS)
+        self.was_pacing = pacing
+        return pacing
+
+    def end_fast_boot(self):
+        """The boot ran ahead of the wall clock: set the RTC back by as much,
+        so that it shows the real time again."""
+        self.fast_boot = False
+        emulated = self.nblocks / (1000 * BLOCKS_PER_MS)
+        wall = time.monotonic() - self.run_start
+        self.pmic.shift(-round(emulated - wall))
+        print(f"[block {self.nblocks}] fast boot: {emulated:.1f} s in {wall:.1f} s")
 
     def power_key_held(self):
         return self.nblocks // BLOCKS_PER_MS < self.args.power_key_ms
@@ -864,7 +899,10 @@ class Machine:
         if self.nblocks >= self.next_progress:
             self.progress(pc)
         if self.realtime and self.next_pace is not None and self.nblocks >= self.next_pace:
-            self.pace()
+            if self.pacing():
+                self.pace()
+            else:
+                self.next_pace = self.nblocks + PACE_BLOCKS
         if self.intc.pending() and not self.uc.reg_read(arm.UC_ARM_REG_CPSR) & arm_exc.CPSR_I:
             self.intc.note_delivery()
             self.exc.deliver(arm_exc.EXC_IRQ, pc=pc & ~1)
@@ -933,6 +971,7 @@ class Machine:
         # with executed blocks, so skip ahead to the next device event (which
         # raises the interrupt that would wake the CPU) and carry on.
         pc = 0
+        self.run_start = time.monotonic()
         if self.realtime:
             self.next_pace = self.nblocks + PACE_BLOCKS
             self.update_deadline()
@@ -990,7 +1029,7 @@ class Machine:
         if not due and not self.realtime:
             return False
         until = min(due) if due else self.nblocks + 3_600_000 * BLOCKS_PER_MS
-        if self.realtime:
+        if self.pacing():
             until = self.sleep_until(until)
         self.wfi_count += 1
         self.wfi_blocks += max(0, until - self.nblocks)
