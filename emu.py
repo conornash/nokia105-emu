@@ -43,6 +43,7 @@ import keypad  # noqa: E402
 import lcd  # noqa: E402
 import lights  # noqa: E402
 import lzma_engine  # noqa: E402
+import mt_sms  # noqa: E402
 import pmic  # noqa: E402
 import sfc  # noqa: E402
 import sim  # noqa: E402
@@ -403,6 +404,7 @@ class Machine:
         if args.sim:
             self.sim = sim.SimController(self, {args.sim_slot}, args.out / "sim.log")
             sim.install(self, READ_HANDLERS, WRITE_HANDLERS)
+        self.inject_sms = mt_sms.install(self, args.inject_sms, BLOCKS_PER_MS) if args.inject_sms else None
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1184,6 +1186,10 @@ def parse_args(argv=None, parser=None):
                    help="insert a test SIM card (GSM 11.11, see sim.py); commands go to OUT/sim.log")
     p.add_argument("--sim-slot", type=int, choices=(0, 1, 2), default=0,
                    help="slot the --sim card is in (0 = the phone's SIM1)")
+    p.add_argument("--inject-sms", type=mt_sms.parse, action="append", default=[], metavar="MS:NUMBER:TEXT",
+                   help="live MT text at emulated time MS (repeatable; needs --sim): stored in the SIM's first "
+                        "free EF_SMS record, then APP_MN_SMS_IND 0xa1a7 dispatched on the APP task (mt_sms.py); "
+                        "log in OUT/inject-sms.log")
     p.add_argument("--slow", action="store_true",
                    help="per-block Python hook (tracks unique blocks; implied by -v and --trace-blocks)")
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",

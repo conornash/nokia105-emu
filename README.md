@@ -150,6 +150,7 @@ same options and saves every new screen to `out/frames/`.
 | `--rtc-time 2026-10-27T10:09:00` | RTC time at power-on (default: now) |
 | `--headset` | boot with a headset plugged in (the FM antenna; the TA-1557 sees it on PMIC EIC line 4) |
 | `--sim`, `--sim-slot N` | insert a test 2G SIM card (`sim.py`) in slot N (0 = SIM1); every command it gets is logged to `out/sim.log`. Without `--sim` the phone has no SIM, as before |
+| `--inject-sms MS:NUMBER:TEXT` | a live incoming text at emulated time MS (repeatable; needs `--sim`): written to the card's first free `EF_SMS` record (status 03, UCS-2), then `APP_MN_SMS_IND` 0xa1a7 with its record_id/storage and the decoded SMS is dispatched on the APP task through `DispatchSysSig`, so the stock SMS handlers run (`mt_sms.py`); `out/inject-sms.log` has each step and the unread count before/after |
 | `--mute` | don't play sound in the live window (still saved to `out/audio.wav`) |
 | `--fresh` | live window: start again from the dump (the previous `state/flash.bin` is kept as `.old`) |
 | `--state FILE` | keep the phone's flash in FILE (the live window uses `state/flash.bin`; headless runs start from the dump unless given this) |
