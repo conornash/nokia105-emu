@@ -377,7 +377,9 @@ class Machine:
         self.sfc = sfc.Sfc(self, sfc.SpiFlash(
             memoryview(self.flash).cast("B"), self.flash_size,
             log=lambda line: self.flash_log.write(f"{self.nblocks:10d} {line}\n"),
-            on_change=self.on_flash_change))
+            on_change=self.on_flash_change, now=lambda: self.nblocks,
+            schedule=lambda delay, cb: self.schedule(delay, cb),
+            blocks_per_ms=BLOCKS_PER_MS, on_busy=self.set_flash_busy))
         self.lzma = lzma_engine.LzmaEngine(self)
         self.blocks_per_ms = BLOCKS_PER_MS
         self.intc = irq.Intc(self)
@@ -565,6 +567,11 @@ class Machine:
         self.flash_changed_at = None    # block count of the latest unsaved flash write
         self.bootrom = ctypes.create_string_buffer(
             (self.args.dump / "bootrom.bin").read_bytes(), BOOTROM_SIZE)
+        # what XIP sees while the NOR chip is busy (sfc.py, Busy timing): the
+        # W25Q32 datasheet leaves reads during a program/erase/status write
+        # undefined; all 0xFF is the conservative, deterministic choice
+        self.flash_ff = ctypes.create_string_buffer(b"\xff" * self.flash_size, self.flash_size)
+        self.flash_busy = False
         self.rom_at_zero = None
         self.set_remap(self.args.start == "bootrom")
         self.uc.mem_map(PSRAM_BASE, PSRAM_SIZE)
@@ -598,9 +605,26 @@ class Machine:
                                 ctypes.addressof(self.bootrom))
         else:
             self.uc.mem_map_ptr(0, self.flash_size, UC_PROT_READ | UC_PROT_EXEC,
-                                ctypes.addressof(self.flash))
+                                ctypes.addressof(self.flash_ff if self.flash_busy else self.flash))
         self.rom_at_zero = rom_at_zero
         self.regs[REMAP_REG] = (self.regs.get(REMAP_REG, 0) & ~1) | int(rom_at_zero)
+
+    def set_flash_busy(self, busy):
+        """The NOR chip went busy (True) or ready (False): every XIP window
+        onto it (FLASH_BASE, and address 0 when the flash is remapped there)
+        is switched between the image and the all-0xFF buffer, and the
+        translated code from those windows is dropped so instruction fetches
+        see the change at once (Unicorn's translation cache would otherwise
+        act as an unlimited I-cache)."""
+        if busy == self.flash_busy:
+            return
+        self.flash_busy = busy
+        src = ctypes.addressof(self.flash_ff if busy else self.flash)
+        spans = [FLASH_BASE] + ([0] if self.rom_at_zero is False else [])
+        for base in spans:
+            self.uc.mem_unmap(base, self.flash_size)
+            self.uc.mem_map_ptr(base, self.flash_size, UC_PROT_READ | UC_PROT_EXEC, src)
+            self.uc.ctl_remove_cache(base, base + self.flash_size)
 
     def schedule(self, delay_blocks, callback):
         self.events.append((self.nblocks + delay_blocks, callback))
