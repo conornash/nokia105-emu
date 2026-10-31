@@ -33,6 +33,7 @@ from unicorn.unicorn_py3.unicorn import uc_hook_h, uclib
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import arm_exc  # noqa: E402
 import audio  # noqa: E402
+import battery  # noqa: E402
 import dsp  # noqa: E402
 import eic  # noqa: E402
 import irq  # noqa: E402
@@ -179,6 +180,7 @@ ANA_READ_HANDLERS = {
     # 0x8200134c. Conversions finish instantly; see adc_result.
     0x8200135c: lambda m: m.regs.get(0x8200135c, 0) | 1,
     0x8200134c: lambda m: adc_result(m),
+    battery.CHG_STATUS: lambda m: m.battery.status(),
     pmic.RTC_INT_STS: lambda m: m.pmic.rtc_status,
     **{a: (lambda m, i=i: m.pmic.rtc_read(i)) for i, a in enumerate(pmic.RTC_COUNT)},
     pmic.ANA_INT_STS: lambda m: m.pmic.read_ana_int(),
@@ -197,6 +199,7 @@ G2D_CTRL = G2D_BASE
 G2D_DONE = 1 << 7
 
 READ_HANDLERS = {
+    battery.EFUSE_DATA: lambda m: battery.efuse_read(m),
     0x81003004: lambda m: m.nblocks * 32768 // (1000 * BLOCKS_PER_MS),
     0x8100300c: lambda m: m.nblocks // BLOCKS_PER_MS,
     lzma_engine.LZMA_BASE + lzma_engine.INT: lambda m: m.lzma.read_int(),
@@ -252,6 +255,7 @@ READ_HANDLERS = {
 
 EIC_POWER_KEY = 1 << 1
 POWERED_OFF = "powered off"     # stop reason when the phone switches itself off
+SWITCHES = ("charger", "headset")   # --keys names that plug something in
 EIC_BATTERY = 1 << 8  # inferred, see Machine.eic_inputs
 
 # ADC results are keyed by the channel register's low 7 bits (channel in
@@ -259,7 +263,8 @@ EIC_BATTERY = 1 << 8  # inferred, see Machine.eic_inputs
 # observed), falling back to the channel number alone.
 # 0x62 (channel 2): battery voltage read 7 times by the boot check at flash
 #   0x1bf1a; with this emulator's (default) calibration the firmware computes
-#   mV = 690 + 1.25 * raw, measured at raw 0x400/0x800/0xc00.
+#   mV = 690 + 1.25 * raw, measured at raw 0x400/0x800/0xc00. Channels 2 and
+#   3 (the charger voltage) come from battery.Battery unless --adc sets them.
 # 0x60 (channel 0): read 12 times by the charge manager's periodic check
 #   (flash 0x1b18e/0x1bece) and converted to a value that falls as raw rises
 #   (0x20 -> 1166, 0x100 -> 1070, 0x400 -> 1023, 0x800 -> 1001; raw 0 is
@@ -268,18 +273,20 @@ EIC_BATTERY = 1 << 8  # inferred, see Machine.eic_inputs
 #   0x400003f1 low) and powers off 3 s later. The two-sided limit suggests
 #   battery temperature (NTC) rather than voltage; that reading is inferred.
 #   Values measured by running the firmware's conversion.
-ADC_VBAT = 0x62
 ADC_BATTERY_TEMP = 0x60
 BATTERY_TEMP_RAW = 0x400
-
-
-def vbat_raw(mv):
-    return max(0, min(0xfff, round((mv - 690) / 1.25)))
+DEFAULT_BATTERY_MV = 3900
 
 
 def adc_result(m):
     reg = m.regs.get(0x82001304, 0) & 0x7f
-    raw = m.args.adc.get(reg, m.args.adc.get(reg & 0x1f, 0))
+    channel = reg & 0x1f
+    if reg in m.args.adc or channel in m.args.adc:
+        raw = m.args.adc.get(reg, m.args.adc.get(channel))
+    elif channel in (battery.ADC_VBAT, battery.ADC_VCHG):
+        raw = m.battery.adc(channel)
+    else:
+        raw = 0
     return raw & 0xfff
 
 # Registers whose writes trigger device behaviour (called with the full word).
@@ -302,6 +309,7 @@ WRITE_HANDLERS = {
     **{a: (lambda m, v, i=i: m.pmic.on_alarm_set(i, v)) for i, a in enumerate(pmic.RTC_ALARM)},
     **{a: (lambda m, v: m.lights.on_write()) for a in lights.REGISTERS},
     pmic.POWER_DOWN: lambda m, v: m.power_off(),
+    battery.CHG_CTRL: lambda m, v: m.battery.on_ctrl(),
     lcd.LCDC_BASE + lcd.LCDC_CTRL: lambda m, v: m.lcdc.on_ctrl(v),
     lcd.LCDC_BASE + lcd.IRQ_CLR: lambda m, v: m.lcdc.on_clr(v),
     lcd.LCDC_BASE + lcd.IRQ_EN: lambda m, v: m.lcdc.update_line(),
@@ -392,9 +400,17 @@ class Machine:
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
+        mv = args.battery_mv or self.saved_battery() or DEFAULT_BATTERY_MV
+        self.battery = battery.Battery(self, mv, args.charger, args.charge_minutes,
+                                       log=lambda line: print(f"[block {self.nblocks}] {line}"))
         for at_ms, name, hold_ms in args.keys:
+            if name in SWITCHES:        # plugged in for HOLD ms
+                self.schedule(at_ms * BLOCKS_PER_MS, lambda n=name: self.switch(n, True))
+                self.schedule((at_ms + hold_ms) * BLOCKS_PER_MS, lambda n=name: self.switch(n, False))
+                continue
             if name not in self.keypad.names():
-                raise SystemExit(f"--keys: unknown key {name!r}; known: {' '.join(self.keypad.names())}")
+                raise SystemExit(f"--keys: unknown key {name!r}; known: "
+                                 f"{' '.join(self.keypad.names() + list(SWITCHES))}")
             self.schedule(at_ms * BLOCKS_PER_MS, lambda n=name: self.keypad.press(n))
             self.schedule((at_ms + hold_ms) * BLOCKS_PER_MS, lambda n=name: self.keypad.release(n))
         # input from another thread (live.py): (press|release, key name)
@@ -615,8 +631,8 @@ class Machine:
             self.g2d_log.write(f"{self.nblocks:10d} op {self.g2d_ops} pc {self._pc():08x}: {regs}\n")
 
     def inject(self, action, arg):
-        """Queue a key press/release or a headset plug change; safe to call
-        from another thread."""
+        """Queue a key press/release, a headset or charger plug change or a
+        battery voltage; safe to call from another thread."""
         self.inputs.append((action, arg))
         self.input_ready.set()
         self.clock.deadline = 0     # stop at the next block to take it
@@ -624,11 +640,39 @@ class Machine:
     def take_inputs(self):
         while self.inputs:
             action, arg = self.inputs.popleft()
-            if action == "headset":
-                self.eic.set_headset(arg)
-                print(f"[block {self.nblocks}] headset {'plugged in' if arg else 'unplugged'}")
+            if action in SWITCHES:
+                self.switch(action, arg)
+            elif action == "battery":
+                self.battery.set_mv(arg)
             else:
                 (self.keypad.press if action == "press" else self.keypad.release)(arg)
+
+    def switch(self, name, plugged):
+        """Plug the headset or the charger in or out."""
+        if name == "charger":
+            self.battery.plug(plugged)
+        else:
+            self.eic.set_headset(plugged)
+            print(f"[block {self.nblocks}] headset {'plugged in' if plugged else 'unplugged'}")
+
+    def battery_path(self):
+        return self.args.state.with_name(self.args.state.name + ".battery") if self.args.state else None
+
+    def saved_battery(self):
+        """The battery voltage when the saved phone last ran, if any."""
+        path = self.battery_path()
+        if path is None:
+            return None
+        try:
+            return float(path.read_text())
+        except (OSError, ValueError):
+            return None
+
+    def save_battery(self):
+        path = self.battery_path()
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{self.battery.mv:.0f}\n")
 
     def wall_blocks(self):
         """Wall-clock time since the run started, in blocks."""
@@ -658,10 +702,13 @@ class Machine:
         """EIC debounce data (0x82001200). Bit 1 is the power key (fpdoom
         keypad_read_pb; the power-on reason check at flash 0x1f0c6 reads it).
         Bit 8 is kernel input 0x18: a normal boot powers off if it reads 0
-        (kern 0x4000b5a), so it is taken to be battery detect."""
+        (kern 0x4000b5a), so it is taken to be battery detect. Bit 0 is the
+        charger (battery.py)."""
         bits = 0
         if self.power_key_held() or self.keypad.power_held:
             bits |= EIC_POWER_KEY
+        if self.battery.plugged:
+            bits |= battery.EIC_CHARGER
         if not self.args.no_battery:
             bits |= EIC_BATTERY
         return bits
@@ -913,6 +960,7 @@ class Machine:
         self.trace.close()
         self.flash_log.close()
         self.save_state()
+        self.save_battery()
         self.exc_log.close()
         self.errors.close()
         self.lcd_log.close()
@@ -1043,8 +1091,12 @@ def parse_args(argv=None, parser=None):
                    help="report no battery on the battery-detect input (EIC 8)")
     p.add_argument("--lcd-id", type=lambda v: int(v, 0), default=0x83760f,
                    help="ID the LCD panel reports (default: first entry of the firmware's table)")
-    p.add_argument("--battery-mv", type=int, default=3900,
-                   help="battery voltage reported on ADC channel 2")
+    p.add_argument("--battery-mv", type=int, default=None,
+                   help=f"battery voltage at power-on (default: as the saved phone left it, "
+                        f"else {DEFAULT_BATTERY_MV})")
+    p.add_argument("--charger", action="store_true", help="start with the charger plugged in")
+    p.add_argument("--charge-minutes", type=float, default=10,
+                   help="time to charge the battery from empty to full (default 10)")
     p.add_argument("--adc", action="append", default=[], metavar="CH=RAW",
                    help="raw 12-bit ADC result: KEY is a channel (0-31) or a channel register value with scale bits (0x20-0x7f)")
     p.add_argument("--automap", action="store_true",
@@ -1074,7 +1126,7 @@ def parse_args(argv=None, parser=None):
         if not (args.dump / name).is_file():
             p.error(f"{args.dump / name} not found: dump your phone first (docs/DUMPING.md) or pass --dump DIR")
     args.breaks = {int(a, 0) for a in args.breaks.split(",") if a}
-    args.adc = {ADC_VBAT: vbat_raw(args.battery_mv), ADC_BATTERY_TEMP: BATTERY_TEMP_RAW,
+    args.adc = {ADC_BATTERY_TEMP: BATTERY_TEMP_RAW,
                 **{int(k, 0): int(v, 0) for k, v in (a.split("=") for a in args.adc)}}
     if args.trace_limit is None:   # the MMIO trace is on when a filter asks for it
         args.trace_limit = 200_000 if args.trace_after or args.trace_addrs != "0:0xffffffff" else 0

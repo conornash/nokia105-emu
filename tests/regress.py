@@ -42,7 +42,8 @@ PEAK_MS = 100               # sound is compared as peaks over windows this long
 LOUD, QUIET = 2000, 200     # peak levels for the sound checks
 
 # Each scenario: RTC time at power-on, emulated length, keys (MS:KEY[:HOLD]),
-# how the run ends if not by using up its time, and checks: (log line
+# other emu.py options, how the run ends if not by using up its time, and
+# checks: (log line
 # pattern, from ms, to ms) that must appear in that window, and
 # ("loud" | "quiet", from ms, to ms) for the sound.
 SCENARIOS = {
@@ -70,6 +71,17 @@ SCENARIOS = {
         about="holding the red key on the home screen switches the phone off",
         rtc="2026-10-29T09:00:05", ms=20000, keys="10000:end:4000", stop="powered off",
         checks=[("backlight off", 12000, 14000), ("power off", 13000, 15000)]),
+    "charge": dict(
+        about="the charger plugged in at 4.1 V, charging to full, then unplugged",
+        rtc="2026-10-29T09:00:05", ms=60000, keys="12000:charger:40000",
+        args=["--battery-mv", "4100", "--charge-minutes", "2"],
+        checks=[("charger plugged in", 12000, 12000), ("charging on", 12000, 12100),
+                ("battery full", 25900, 28000), ("charging off", 26000, 32000),
+                ("charger unplugged", 52000, 52000)]),
+    "flat": dict(
+        about="a flat battery (3.4 V): the phone warns and switches itself off",
+        rtc="2026-10-29T09:00:05", ms=30000, keys="", args=["--battery-mv", "3400"],
+        stop="powered off", checks=[("power off", 18000, 24000)]),
 }
 
 
@@ -185,8 +197,12 @@ def compare(new, ref):
         yield f"the run ended with {new.stop!r}, expected {ref.stop!r}"
     for a, b in zip(ref.events, new.events):
         if a != b:
-            yield (f"log differs: expected {a[1]!r} at {seconds(a[0] / BLOCKS_PER_MS)}, "
-                   f"got {b[1]!r} at {seconds(b[0] / BLOCKS_PER_MS)}")
+            if a[1] == b[1]:
+                yield (f"log line {a[1]!r} at {seconds(a[0] / BLOCKS_PER_MS)} moved by "
+                       f"{b[0] - a[0]:+d} blocks ({(b[0] - a[0]) / BLOCKS_PER_MS:+.3f} ms)")
+            else:
+                yield (f"log differs: expected {a[1]!r} at {seconds(a[0] / BLOCKS_PER_MS)}, "
+                       f"got {b[1]!r} at {seconds(b[0] / BLOCKS_PER_MS)}")
             break
     else:
         if len(ref.events) != len(new.events):
@@ -226,7 +242,8 @@ def run_scenario(name):
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
     cmd = [sys.executable, "-I", str(ROOT / "emu.py"), "--rtc-time", sc["rtc"],
-           "--max-blocks", str(sc["ms"] * BLOCKS_PER_MS), "--keys", sc["keys"], "--out", str(folder)]
+           "--max-blocks", str(sc["ms"] * BLOCKS_PER_MS), "--keys", sc["keys"], "--out", str(folder),
+           *sc.get("args", [])]
     start = time.monotonic()
     with open(folder / "run.log", "w") as log:
         subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)

@@ -49,6 +49,7 @@ faulting address (the engine's windowed mode).
 | DSP shared memory / mailbox | `0x30000000` | 21 | `dsp.py` |
 | DMA controller | `0x20100000` | 31 | `audio.py` |
 | GPIO (torch) | `0x8a000000` | | `lights.py` |
+| eFuse (ADC calibration) | `0x82002000` | | `battery.py` |
 | Voice-band codec (DAC FIFOs) | `0x82003000` | | `audio.py` |
 
 Interrupt controller banks: `+0x00` masked status, `+0x04` raw, `+0x08`
@@ -88,8 +89,8 @@ Reads go through the ADI: write the register offset to `0x82000008`, read
   The high byte of spare register `0x820011d0` must be `0xbb` or boot
   resets the clock to 2023-01-01 (flash `0x1727c`).
 - EIC `0x82001200`: data `+0x00`, polarity `+0x14`, enable `+0x18`, raw
-  `+0x1c`, masked `+0x20`. Inputs: bit 1 = power key (pressed = 1), bit 8 =
-  battery present.
+  `+0x1c`, masked `+0x20`. Inputs: bit 0 = charger, bit 1 = power key
+  (pressed = 1), bit 8 = battery present.
 
 ### Digital EIC (`0x8a001000`)
 
@@ -177,6 +178,45 @@ within a few milliseconds). The flash model applies those writes to its
 in-memory image; `--state FILE` saves that image 2 s after the firmware
 last wrote it, and again at the end of a run, and boots from it next time,
 with `FILE.source` holding the SHA-256 of the dump it came from.
+
+### Battery and charger
+
+The battery is ADC channel 2 (`0x62`, 690 mV + 1.25 mV per step with the
+calibration below). The charge manager (thread `CHGMNG_SRV`, message switch
+at flash `0x1baa6`) turns it into a level through a 12-point table (flash
+`0x1b494`); about 3.6 V gives Battery low, 3.5 V Low battery, and 3.4 V
+Battery empty and a power-off.
+
+Plugging the charger in raises PMIC EIC input 0 (kernel input 7, callback
+kern `0x40008e8`), but the handler (flash `0x1bdfe`) ignores the level and
+reads the charger status `0x8200155c`: bit 2 = charger present (flash
+`0x212ac`); without it the phone says the battery is not fully charged, as
+when unplugged. While charging, a check every 500 ms (flash `0x1b760`):
+
+- measures the charger voltage on ADC channel 3 (`0x63`) on the small
+  scale, times 1000/74 (flash `0x1b58a`); four readings under 4300 mV in a
+  row mean unplugged;
+- ends the charge when status bit 4 (flash `0x212a2`) has been set for ten
+  checks (reason 4: "Battery full. Unplug charger from socket.");
+- stops on status bit 1 or 0 (flash `0x212b6`, `0x212c0`) as a fault
+  (reason 5: "Not charging").
+
+Bit 0 of `0x82001550` switches charging off (flash `0x210da`).
+
+The small scale has to be calibrated, from the eFuse (`0x82002000`: block
+number written to both halves of `+0x08`, data at `+0x00`). The kernel
+builds the ADC calibration (kern `0x4015728`, record at RAM `0x42fbf44`):
+the battery scale from block 5 bits 28-21 and 20-13 (flash `0x1df08`; 0
+gives the 1.25 mV per step above), the small scale from block 5 bits 12-5,
+which must be at least 46, and block 6 bits 29-22 (flash `0x1df66`). With
+the eFuse all zero the small scale stays uncalibrated, every charger
+reading converts to 0 mV, and the charger is taken out within 2 s; the
+emulator's eFuse puts 1000 mV at raw 3276 and 100 mV at raw 328.
+
+Started by the charger (power key not held), the phone boots into
+charging-only mode, but first the kernel (kern `0x40263cc`) waits up to
+15 s for a PC on the USB/serial port, cut short only by the charger going
+or the power key.
 
 ### GPIO and lights (`0x8a000000`)
 

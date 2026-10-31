@@ -9,6 +9,7 @@ usage: .venv/bin/python -I live.py [--scale N] [--no-skin] [emu.py options]
 Keys: arrows = navigate, Enter/space = select, [ and ] (or F1/F2) = left
 and right soft keys, Backspace = right soft key, c = call (green),
 Escape = end/power (red), 0-9 * # = keypad, h = plug/unplug a headset,
+p = plug/unplug the charger, - and = = battery 0.1 V lower/higher,
 s = screenshot, r = start/stop recording.
 
 The screen dims and darkens with the phone's backlight, the key labels
@@ -17,7 +18,8 @@ edge (up twice on the home screen toggles it).
 
 Holding the red key switches the phone off (Switch off!); holding it again
 switches it back on, booting from the saved phone with its clock carried
-on.
+on. Plugging the charger into a phone that is off starts it charging, as
+on the phone (hold the red key then to switch it on).
 
 Screenshots (the screen at 3x, and the whole phone) and recordings (an
 animated GIF of the screen) go to out/shots/.
@@ -55,7 +57,9 @@ KEYS = {
     **{str(d): str(d) for d in range(10)},
     **{f"KP_{d}": str(d) for d in range(10)},
 }
-HELP = "arrows  Enter=select  [ ]=soft keys  c=call  Esc=end  0-9 * #  h=headset  s=screenshot  r=record"
+HELP = ("arrows  Enter=select  [ ]=soft keys  c=call  Esc=end  0-9 * #  h=headset  p=charger  "
+        "-/= battery  s=screenshot  r=record")
+BATTERY_KEYS = {"minus": -100, "KP_Subtract": -100, "equal": 100, "plus": 100, "KP_Add": 100}
 # a key release this soon after its press is taken as autorepeat
 REPEAT_MS = 40
 # window height to leave for the title bar, the desktop's bars and the
@@ -148,6 +152,15 @@ class Window:
         if event.keysym == "h":
             self.m.inject("headset", not self.m.eic.headset)
             return
+        if event.keysym == "p":
+            if self.m.stop_reason == emu.POWERED_OFF:
+                self.power_on(key=False, charger=True)
+            else:
+                self.m.inject("charger", not self.m.battery.plugged)
+            return
+        if event.keysym in BATTERY_KEYS:
+            self.m.inject("battery", self.m.battery.mv + BATTERY_KEYS[event.keysym])
+            return
         if event.keysym in ("s", "r"):
             (self.screenshot if event.keysym == "s" else self.toggle_recording)()
             return
@@ -187,20 +200,24 @@ class Window:
                 self.m.inject("press", name)
             self.light(name, "normal")
 
-    def power_on(self):
+    def power_on(self, key=True, charger=None):
         """Switch the phone on again. A new machine boots from the saved
-        phone with its clock carried on from the old one's, and the red key
-        held for as long as it is held here: let go too soon and the
-        firmware switches off again, as on the phone."""
+        phone with its clock and battery carried on from the old one's,
+        and the red key held for as long as it is held here: let go too
+        soon and the firmware switches off again, as on the phone. Without
+        the key but with the charger plugged in, it starts charging."""
         self.thread.join()          # the old machine saves the phone as it ends
         old = self.m
         off_for = time.monotonic() - (self.off_since or time.monotonic())
         old.args.rtc_time = old.pmic.clock() + datetime.timedelta(seconds=off_for)
         old.args.power_key_ms = 0
+        old.args.battery_mv = old.battery.mv
+        old.args.charger = old.battery.plugged if charger is None else charger
         machine = emu.Machine(old.args)
         machine.realtime = True
         machine.vbc.live = old.vbc.live
-        machine.keypad.press(emu.keypad.POWER_KEY)
+        if key:
+            machine.keypad.press(emu.keypad.POWER_KEY)
         self.m, self.off_since = machine, None
         self.thread = threading.Thread(target=machine.run, daemon=True)
         self.thread.start()
@@ -225,6 +242,10 @@ class Window:
         off = self.m.stop_reason == emu.POWERED_OFF
         if off and self.off_since is None:
             self.off_since = time.monotonic()
+        if off and self.m.battery.plugged and not self.closing:
+            # switched off on the charger: the charger keeps it charging
+            self.power_on(key=False)
+            off = False
         version = (self.m.lcdc.refreshes, self.m.panel.pixels, backlight, off)
         if version != self.shown:
             if self.shown is None or version[:2] != self.shown[:2]:
@@ -247,10 +268,15 @@ class Window:
             self.canvas.itemconfigure(self.screen, image=self.photo)
         ms = self.m.nblocks // emu.BLOCKS_PER_MS
         if off:
-            state = "switched off: hold the red key (Esc) to switch on"
+            state = "switched off: hold the red key (Esc) to switch on, or plug the charger in (p)"
         else:
             state = self.m.stop_reason or ("booting" if self.m.lcdc.refreshes < 3 else "running")
-        notes = ["torch on"] if torch else []
+        power = self.m.battery
+        notes = [f"battery {power.mv / 1000:.2f} V" + (" charging" if power.charging else
+                                                       " full" if power.full else
+                                                       " charger in" if power.plugged else "")]
+        if torch:
+            notes.append("torch on")
         if self.recording:
             seconds = time.monotonic() - self.recording[0][0]
             if seconds >= MAX_RECORDING_S:

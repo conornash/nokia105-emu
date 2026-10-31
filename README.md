@@ -12,8 +12,8 @@ The CPU is emulated with [Unicorn](https://www.unicorn-engine.org/); the
 chip's peripherals are reimplemented in Python from what the firmware
 expects of them: interrupt controller, timers, SPI flash, hardware LZMA,
 LCD controller and panel, the JPEG decoder and colour converter, keypad,
-the PMIC (RTC and alarm, ADC, external interrupts, audio codec, backlight
-LEDs), GPIO, the DMA controller and voice-band codec that play sound, and
+the PMIC (RTC and alarm, ADC, charger, external interrupts, audio codec,
+backlight LEDs), eFuse, GPIO, the DMA controller and voice-band codec that play sound, and
 enough of the DSP mailbox to get past start-up.
 
 **No firmware is included.** You need to dump your own phone; see
@@ -31,6 +31,14 @@ Works:
 - Keypad input: main menu, Messages, Calendar, Snake and the other menus,
   Back and the red end key.
 - Display sleep and wake, and headset plug/unplug.
+- Battery and charger: plug the charger in (`p`) and the phone shows
+  Charging and fills the battery icon, then "Battery full. Unplug charger
+  from socket." when it is full (charging takes `--charge-minutes`, 10 by
+  default, from empty). Unplugged early it says the battery isn't fully
+  charged. Lower the battery with `-` to see Battery low, Low battery and
+  finally Battery empty, when the phone switches itself off. Plugged into a
+  phone that is off, the charger starts it in charging-only mode, as on the
+  real phone. The battery level is kept with the saved phone.
 - Switching off and on: hold the red key (Esc) to switch the phone off,
   and hold it again to switch it back on. It boots from its saved
   settings with the clock carried on; let go too soon and it switches off
@@ -65,7 +73,8 @@ Works:
 Doesn't work (yet):
 - No SIM, network or radio: the DSP is only a stub, so "No SIM card".
 - Call audio and FM radio are silent.
-- No camera or USB.
+- No camera or USB. Started by the charger, the phone first waits 15 s
+  for a PC on its USB port before it shows the charging screen.
 - No vibration. The phone's own vibrator test only powers the audio path up
   and down, and no register that drives a motor was found.
 - Only tested with firmware `MOCOR_20C_6531E_W23.19.4` from a TA-1423.
@@ -109,6 +118,8 @@ Click the keys on the phone in the window, or use the keyboard:
 | `h` | plug / unplug a headset |
 | `s` | screenshot: the screen at 3x, and the whole phone, to `out/shots/` |
 | `r` | start / stop recording the screen as an animated GIF, to `out/shots/` |
+| `p` | plug / unplug the charger |
+| `-` / `=` | battery 0.1 V lower / higher |
 
 The Screenshot and Record buttons under the phone do the same.
 
@@ -127,9 +138,11 @@ same options and saves every new screen to `out/frames/`.
 | `--state FILE` | keep the phone's flash in FILE (the live window uses `state/flash.bin`; headless runs start from the dump unless given this) |
 | `--scale N` | window pixels per LCD pixel (`live.py`; default: the largest up to 3 that fits the screen, in steps of 0.25) |
 | `--no-skin` | show only the screen, without the phone around it (`live.py`) |
-| `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down` |
+| `--keys MS:KEY[:HOLD],…` | scripted key presses at emulated times, e.g. `10000:select,12000:down`; `charger` and `headset` plug in for HOLD ms, e.g. `12000:charger:60000` |
 | `--max-blocks N` | stop after N translation blocks (4000 blocks = 1 ms) |
-| `--battery-mv MV`, `--no-battery`, `--adc CH=RAW` | power-supply readings |
+| `--battery-mv MV` | battery voltage at power-on (default: as the saved phone left it, else 3900) |
+| `--charger`, `--charge-minutes N` | start with the charger plugged in; minutes to charge from empty to full (default 10) |
+| `--no-battery`, `--adc CH=RAW` | other power-supply readings |
 | `--break ADDR,…`, `--trace-after BLOCK`, `--trace-addrs LO:HI` | debugging: breakpoints, MMIO trace to `out/mmio_trace.log` |
 | `--slow`, `--trace-blocks A:B`, `-v` | per-block Python hook: counts unique blocks, traces blocks (much slower) |
 
@@ -148,7 +161,8 @@ counts and every peripheral register touched; `out/psram.bin` and
 `make test` runs scripted sessions headless and checks them against a
 reference recorded earlier from your dump: the boot and a menu tour; an
 alarm set, rung and stopped, with the backlight timing out and the torch;
-and switching off. Emulation is deterministic, so every log line, screen
+switching off; charging to full; and a flat battery switching the phone
+off. Emulation is deterministic, so every log line, screen
 and sound sample has to match; a difference is reported with the first
 log line, screen and moment of sound that changed, and the changed screen
 is saved next to the reference one in `out/test/`. The runs take a few
@@ -200,6 +214,7 @@ map, every modelled peripheral, and the firmware addresses behind them.
 | `keypad.py`, `eic.py`, `pmic.py` | keypad, digital EIC, PMIC (RTC, EIC) |
 | `audio.py` | DMA controller and voice-band codec: sound output |
 | `lights.py` | screen and keypad backlights, torch |
+| `battery.py` | battery, charger, and the eFuse calibration the ADC needs |
 | `dsp.py` | DSP mailbox stub |
 | `disasm.py`, `mkelf.py` | helpers: disassemble a range; wrap a raw image as an ELF for Ghidra |
 | `tests/regress.py` | `make test`: scripted runs checked against a recorded reference |
