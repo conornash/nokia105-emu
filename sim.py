@@ -183,8 +183,9 @@ class CardFiles:
         # SMS (GSM 11.11 10.5.3): record 1 status 03 (received, unread), SMSC
         # +447000000000, SMS-DELIVER from +447700900123, PID 00, DCS 08 (UCS-2),
         # SCTS 2026-10-30 21:40:00 +00, UDL 10, "Hi \U0001f600" (surrogate pair);
-        # records 2-10 free
-        File(0x6f3c, "EF_SMS", EF, tel, LINEAR, (b"\x03" + bytes.fromhex("0791440700000000040c914477000910320008620103120400000a004800690020d83dde00")).ljust(176, b"\xff") + (b"\x00" + b"\xff" * 175) * 9, 176)
+        # record 2 the same but SCTS 2026-10-30 21:45:00 +00, UDL 06, "Two";
+        # records 3-10 free
+        File(0x6f3c, "EF_SMS", EF, tel, LINEAR, (b"\x03" + bytes.fromhex("0791440700000000040c914477000910320008620103120400000a004800690020d83dde00")).ljust(176, b"\xff") + (b"\x03" + bytes.fromhex("0791440700000000040c914477000910320008620103125400000600540077006f")).ljust(176, b"\xff") + (b"\x00" + b"\xff" * 175) * 8, 176)
         File(0x6f40, "EF_MSISDN", EF, tel, LINEAR, b"\xff" * 28 * 2, 28)
         # SMS parameters (GSM 11.11 10.5.6): 12-byte alpha tag, indicators
         # (0 = present: SC address, PID, DCS, validity; no destination),
