@@ -1,0 +1,13 @@
+run answer: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/main/answer --max-blocks 124000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-call 25000:07700900461 --keys 27000:select --inject-call-event 30000:disc:16
+run connect: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/main/connect --max-blocks 114000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-call 25000:07700900461 --keys 27000:select --inject-call-event 28000:connect
+run overlap: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/main/overlap --max-blocks 110000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-sms 25000:+447700900123:Hi --inject-call 25100:07700900461 --inject-sms 26000:+447700900123:Same --inject-call 26000:07700900123
+run answer: exit 0; emu.log last line: ... full register table in /tmp/wE/main/answer/report.txt
+run connect: exit 0; emu.log last line: ... full register table in /tmp/wE/main/connect/report.txt
+run overlap: exit 0; emu.log last line: ... full register table in /tmp/wE/main/overlap/report.txt
+PASS A1 ConnectCallEx logged after the answer key:    27151.6 ms call ConnectCallEx(dual_sys=0 call_id=0 utu=0x00000000) lr=0x04203af1
+PASS A3 DISCONNECTED_IND 0xa15b cause 16 reached the shell: [(30046, '0000', '0000a15b')] W1 [(30046, '0200', '00000010')]
+PASS B1 both texts reached the shell: 2 x TEL a 0x0001 b 0x0000a1a7: [(25024, '0001', '0000a1a7'), (26035, '0001', '0000a1a7')]
+PASS B2 both calls reached the shell: 2 x TEL a 0x0000 b 0x0000a15d: [(25142, '0000', '0000a15d'), (26057, '0000', '0000a15d')]
+PASS B3 every run exited 0: {'answer': 0, 'connect': 0, 'overlap': 0}
+PASS C1 SETUP_COMPLETE_IND 0xa159 reached the shell: [(28036, '0000', '0000a159')]
+SELFTEST PASS
