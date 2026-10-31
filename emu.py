@@ -43,6 +43,7 @@ import keypad  # noqa: E402
 import lcd  # noqa: E402
 import lights  # noqa: E402
 import lzma_engine  # noqa: E402
+import mt_call  # noqa: E402
 import mt_sms  # noqa: E402
 import pmic  # noqa: E402
 import sfc  # noqa: E402
@@ -405,6 +406,7 @@ class Machine:
             self.sim = sim.SimController(self, {args.sim_slot}, args.out / "sim.log")
             sim.install(self, READ_HANDLERS, WRITE_HANDLERS)
         self.inject_sms = mt_sms.install(self, args.inject_sms, BLOCKS_PER_MS) if args.inject_sms else None
+        self.inject_call = mt_call.install(self, args.inject_call, BLOCKS_PER_MS) if args.inject_call else None
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1190,6 +1192,10 @@ def parse_args(argv=None, parser=None):
                    help="live MT text at emulated time MS (repeatable; needs --sim): stored in the SIM's first "
                         "free EF_SMS record, then APP_MN_SMS_IND 0xa1a7 dispatched on the APP task (mt_sms.py); "
                         "log in OUT/inject-sms.log")
+    p.add_argument("--inject-call", type=mt_call.parse, action="append", default=[], metavar="MS:NUMBER[:ENDMS]",
+                   help="live MT call at emulated time MS (repeatable): APP_MN_SETUP_IND 0xa15d with the caller's "
+                        "digits dispatched on the APP task; at ENDMS (optional) APP_MN_DISCONNECTED_IND 0xa15b, "
+                        "the far end hanging up (mt_call.py); log in OUT/inject-call.log")
     p.add_argument("--slow", action="store_true",
                    help="per-block Python hook (tracks unique blocks; implied by -v and --trace-blocks)")
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",
