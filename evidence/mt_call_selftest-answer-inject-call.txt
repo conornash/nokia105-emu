@@ -1,0 +1,7 @@
+       0.0 ms armed 25000 ms: 0xa15d SETUP_IND from 07700900461
+       0.0 ms armed 30000 ms: 0xa15b DISCONNECTED_IND cause 16
+   25024.5 ms SETUP_IND from 07700900461 (armed 25000 ms): signal 0xa15d at 0x040e2688, body 0x040e2698 000100000000000001000000000000000000000006007007900064f1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -> DispatchSysSig from the APP dispatch, interrupted lr 0x0400f6ef
+   25025.3 ms DispatchSysSig returned r0=0x1; the task's own signal proceeds
+   27151.6 ms call ConnectCallEx(dual_sys=0 call_id=0 utu=0x00000000) lr=0x04203af1
+   30046.5 ms DISCONNECTED_IND cause 16 (armed 30000 ms): signal 0xa15b at 0x040e2688, body 0x040e2698 000000001000000000000000 -> DispatchSysSig from the APP dispatch, interrupted lr 0x0400f6ef
+   30047.4 ms DispatchSysSig returned r0=0x1; the task's own signal proceeds

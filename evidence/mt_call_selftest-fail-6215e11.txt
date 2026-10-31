@@ -1,0 +1,13 @@
+run answer: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/old/answer --max-blocks 124000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-call 25000:07700900461 --keys 27000:select --inject-call-event 30000:disc:16
+run connect: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/old/connect --max-blocks 114000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-call 25000:07700900461 --keys 27000:select --inject-call-event 28000:connect
+run overlap: /Users/conornash/Documents/nokia105-emu/.venv/bin/python -I /Users/conornash/Documents/nokia105-emu/emu.py --lcd-id 0x7c89f0 --power-key-ms 8000 --poll-limit 40000000 --dump /Users/conornash/Documents/nokia105/work/lughos-next/dump --out /tmp/wE/old/overlap --max-blocks 110000000 --rtc-time 2026-10-30T21:47:00 --sim --start flash --inject-sms 25000:+447700900123:Hi --inject-call 25100:07700900461 --inject-sms 26000:+447700900123:Same --inject-call 26000:07700900123
+run answer: exit 2; emu.log last line: emu.py: error: unrecognized arguments: --inject-call-event 30000:disc:16
+run connect: exit 2; emu.log last line: emu.py: error: unrecognized arguments: --inject-call-event 28000:connect
+run overlap: exit 0; emu.log last line: ... full register table in /tmp/wE/old/overlap/report.txt
+FAIL A1 ConnectCallEx logged after the answer key: no such line in /tmp/wE/old/answer/inject-call.log (0 lines)
+FAIL A3 DISCONNECTED_IND 0xa15b cause 16 reached the shell: no TEL a 0x0000 b 0x0000a15b (0 TEL lines)
+FAIL B1 both texts reached the shell: 1 x TEL a 0x0001 b 0x0000a1a7: [(25024, '0001', '0000a1a7')]
+PASS B2 both calls reached the shell: 2 x TEL a 0x0000 b 0x0000a15d: [(25142, '0000', '0000a15d'), (26035, '0000', '0000a15d')]
+FAIL B3 every run exited 0: {'answer': 2, 'connect': 2, 'overlap': 0}
+FAIL C1 SETUP_COMPLETE_IND 0xa159 reached the shell: no TEL a 0x0000 b 0x0000a159
+SELFTEST FAIL

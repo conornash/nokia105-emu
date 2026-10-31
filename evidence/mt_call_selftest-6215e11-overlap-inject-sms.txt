@@ -1,0 +1,7 @@
+       0.0 ms armed 25000 ms from +447700900123: 'Hi'
+       0.0 ms armed 26000 ms from +447700900123: 'Same'
+   25024.5 ms EF_SMS record 3 (record_id 2) = status 03, from +447700900123, SCTS 2026-10-30 21:47:25, 'Hi'
+   25024.5 ms signal 0xa1a7 at 0x040e2688 (body 0x040e2698: cause 0, record_id 2, storage 2) -> DispatchSysSig from the APP dispatch, interrupted lr 0x0400f6ef; unread before 2
+   25142.9 ms DispatchSysSig returned r0=0x40e2aa4; unread after 3; the task's own signal proceeds
+   26035.6 ms EF_SMS record 4 (record_id 3) = status 03, from +447700900123, SCTS 2026-10-30 21:47:26, 'Same'
+   26035.6 ms signal 0xa1a7 at 0x040e2688 (body 0x040e2698: cause 0, record_id 3, storage 2) -> DispatchSysSig from the APP dispatch, interrupted lr 0x0400f6ef; unread before 3

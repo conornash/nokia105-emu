@@ -48,11 +48,9 @@ Addresses are this handset's (Nokia 105 TA-1557 dump): kern 0x040205d8 /
 import datetime
 import struct
 
-import unicorn.arm_const as arm
-from unicorn import UC_HOOK_CODE
+import app_dispatch
+from app_dispatch import APP_DISPATCH, DISPATCH_SYS_SIG, REGS  # noqa: F401  (re-exported)
 
-APP_DISPATCH = 0x040205d8       # kern: the APP task's dispatch of one received signal
-DISPATCH_SYS_SIG = 0x04020594   # kern: walk g_reg_app, call app->ProcessMsg
 APP_MN_SMS_IND = 0xa1a7
 EF_SMS = 0x6f3c
 STORAGE_SIM = 2
@@ -60,8 +58,6 @@ BODY_LEN = 0x110
 SMSC = "+447000000000"
 UNREAD = 0x04358236             # s_mmisms_order +0x36 to_be_read_msg_num (u16), logged before/after
 
-REGS = [getattr(arm, f"UC_ARM_REG_R{i}") for i in range(13)] + [arm.UC_ARM_REG_SP, arm.UC_ARM_REG_LR,
-                                                                arm.UC_ARM_REG_CPSR]
 
 
 def parse(spec):
@@ -115,13 +111,12 @@ class Injector:
         self.m = machine
         self.bpm = blocks_per_ms
         self.pending = sorted(specs)
-        self.active = None
         self.log = open(machine.args.out / "inject-sms.log", "w", buffering=1)
         card = machine.sim.cards[machine.args.sim_slot]
         self.ef = next(f for f in card.files.all() if f.fid == EF_SMS)
-        machine.uc.hook_add(UC_HOOK_CODE, machine._guard(self.on_dispatch),
-                            begin=APP_DISPATCH, end=APP_DISPATCH)
+        q = app_dispatch.queue(machine, blocks_per_ms)
         for ms, number, text in self.pending:
+            q.add(ms, self.fire(ms, number, text), self.done)
             self.w(f"armed {ms} ms from {number}: {text!r}")
 
     def w(self, line):
@@ -139,41 +134,26 @@ class Injector:
                 return i
         return None
 
-    def on_dispatch(self, uc, addr, size, _):
-        sp = uc.reg_read(arm.UC_ARM_REG_SP)
-        if self.active is not None:
-            saved, mark = self.active
-            if sp == mark:
-                for r, v in zip(REGS, saved):
-                    uc.reg_write(r, v)
-                self.active = None
-                self.w(f"DispatchSysSig returned r0=0x{uc.reg_read(arm.UC_ARM_REG_R0):x}; "
-                       f"unread after {self.unread()}; the task's own signal proceeds")
-            return
-        if not self.pending or self.m.nblocks < self.pending[0][0] * self.bpm:
-            return
-        ms, number, text = self.pending.pop(0)
-        ts = self.m.args.rtc_time + datetime.timedelta(milliseconds=ms)
-        ucs2 = text.encode("utf-16-be")[:140]
-        rid = self.store(number, ucs2, ts)
-        if rid is None:
-            self.w(f"EF_SMS full: {text!r} from {number} not stored, no signal (MN would send MEM_FULL)")
-            return
-        self.w(f"EF_SMS record {rid + 1} (record_id {rid}) = status 03, from {number}, "
-               f"SCTS {ts:%Y-%m-%d %H:%M:%S}, {text!r}")
-        saved = [uc.reg_read(r) for r in REGS]
-        base = (sp - 0x400) & ~7
-        sig = struct.pack("<HHIII", APP_MN_SMS_IND, 0x10 + BODY_LEN, 0, 0, 0) + body(rid, number, ucs2, ts)
-        uc.mem_write(base, sig)
-        mark = base - 8
-        uc.reg_write(arm.UC_ARM_REG_R0, base)
-        uc.reg_write(arm.UC_ARM_REG_SP, mark)
-        uc.reg_write(arm.UC_ARM_REG_LR, APP_DISPATCH | 1)
-        uc.reg_write(arm.UC_ARM_REG_PC, DISPATCH_SYS_SIG | 1)
-        self.active = (saved, mark)
-        self.w(f"signal 0x{APP_MN_SMS_IND:04x} at 0x{base:08x} (body 0x{base + 0x10:08x}: cause 0, "
-               f"record_id {rid}, storage {STORAGE_SIM}) -> DispatchSysSig from the APP dispatch, "
-               f"interrupted lr 0x{saved[14]:08x}; unread before {self.unread()}")
+    def fire(self, ms, number, text):
+        def go(uc):
+            ts = self.m.args.rtc_time + datetime.timedelta(milliseconds=ms)
+            ucs2 = text.encode("utf-16-be")[:140]
+            rid = self.store(number, ucs2, ts)
+            if rid is None:
+                self.w(f"EF_SMS full: {text!r} from {number} not stored, no signal (MN would send MEM_FULL)")
+                return None
+            self.w(f"EF_SMS record {rid + 1} (record_id {rid}) = status 03, from {number}, "
+                   f"SCTS {ts:%Y-%m-%d %H:%M:%S}, {text!r}")
+
+            def note(base, saved):
+                self.w(f"signal 0x{APP_MN_SMS_IND:04x} at 0x{base:08x} (body 0x{base + 0x10:08x}: cause 0, "
+                       f"record_id {rid}, storage {STORAGE_SIM}) -> DispatchSysSig from the APP dispatch, "
+                       f"interrupted lr 0x{saved[14]:08x}; unread before {self.unread()}")
+            return APP_MN_SMS_IND, body(rid, number, ucs2, ts), note
+        return go
+
+    def done(self, r0):
+        self.w(f"DispatchSysSig returned r0=0x{r0:x}; unread after {self.unread()}; the task's own signal proceeds")
 
 
 def install(machine, specs, blocks_per_ms):

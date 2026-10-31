@@ -406,7 +406,8 @@ class Machine:
             self.sim = sim.SimController(self, {args.sim_slot}, args.out / "sim.log")
             sim.install(self, READ_HANDLERS, WRITE_HANDLERS)
         self.inject_sms = mt_sms.install(self, args.inject_sms, BLOCKS_PER_MS) if args.inject_sms else None
-        self.inject_call = mt_call.install(self, args.inject_call, BLOCKS_PER_MS) if args.inject_call else None
+        self.inject_call = (mt_call.install(self, args.inject_call, BLOCKS_PER_MS, args.inject_call_event)
+                            if args.inject_call or args.inject_call_event or args.log_calls else None)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1196,6 +1197,15 @@ def parse_args(argv=None, parser=None):
                    help="live MT call at emulated time MS (repeatable): APP_MN_SETUP_IND 0xa15d with the caller's "
                         "digits dispatched on the APP task; at ENDMS (optional) APP_MN_DISCONNECTED_IND 0xa15b, "
                         "the far end hanging up (mt_call.py); log in OUT/inject-call.log")
+    p.add_argument("--inject-call-event", type=mt_call.parse_event, action="append", default=[],
+                   metavar="MS:KIND[:ARG]",
+                   help="CC event for call_id 0 at emulated time MS (repeatable), dispatched like --inject-call: "
+                        "alerting[:TYPE] 0xa158, connect 0xa159 (MT SETUP_COMPLETE_IND), connect:mo 0xa15a "
+                        "(SETUP_COMPLETE_CNF), disc:CAUSE 0xa15b, err:CAUSE 0xa15c (mt_call.py); also logs "
+                        "MNCALL_Start/Connect/DisconnectCallEx calls to OUT/inject-call.log")
+    p.add_argument("--log-calls", action="store_true",
+                   help="log MNCALL_StartCallEx / ConnectCallEx / DisconnectCallEx calls (name, args, lr, ms) to "
+                        "OUT/inject-call.log with no injection (implied by --inject-call / --inject-call-event)")
     p.add_argument("--slow", action="store_true",
                    help="per-block Python hook (tracks unique blocks; implied by -v and --trace-blocks)")
     p.add_argument("--keys", type=parse_keys, default=[], metavar="MS:KEY[:HOLD],...",
