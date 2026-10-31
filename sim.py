@@ -175,7 +175,10 @@ class CardFiles:
         File(0x6fb7, "EF_ECC", EF, gsm, data=bcd_swapped("112f") + b"\xff" + bcd_swapped("999f") + b"\xff",
              access=(0x04, 0x00, 0x44))
         tel = File(0x7f10, "DF_TELECOM", DF, mf)
-        File(0x6f3a, "EF_ADN", EF, tel, LINEAR, b"\xff" * 28 * 20, 28)
+        # ADN (GSM 11.11 10.5.1): 14-byte alpha + BCD length 07, TON/NPI 91,
+        # number, CCP ff, EXT1 ff; record 1 "Aoife" +447700900461, record 2
+        # "Dad" +447700900123; records 3-20 free
+        File(0x6f3a, "EF_ADN", EF, tel, LINEAR, bytes.fromhex("416f696665ffffffffffffffffff0791447700094016ffffffffffff") + bytes.fromhex("446164ffffffffffffffffffffff0791447700091032ffffffffffff") + b"\xff" * 28 * 18, 28)
         File(0x6f3b, "EF_FDN", EF, tel, LINEAR, b"\xff" * 28 * 10, 28, access=(0x12, 0x00, 0x44))
         # SMS (GSM 11.11 10.5.3): record 1 status 03 (received, unread), SMSC
         # +447000000000, SMS-DELIVER from +447700900123, PID 00, DCS 08 (UCS-2),
