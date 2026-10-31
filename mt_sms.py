@@ -29,8 +29,9 @@ plays the MN layer's two steps at emulated time MS:
          +0x0c MN_SMS_MT_SMS_T (2013 mn_type.h): +0x10 sc_addr_t,
          +0x30 origin_addr_t (type, plan, num_len u16 @+0x38, BCD @+0x3a),
          +0x50 pid, +0x54 dcs (0x20 bytes here; alphabet @+0x68 = 2
-         UCS-2), +0x74 time_stamp_t (7 x u8, binary, year - 2000), +0x7b
-         user_data_t (length u8, 141 bytes), +0x10c dual_sys 0.  This
+         UCS-2: the decoder reads [dcs+0x14], user 0x08072316), +0x74 time_stamp_t (7 x u8, binary, year - 2000), +0x7b
+         user_data_t (+0x7c length u8, +0x7d data: the decoder
+         0x08072276 reads [ud+1] as the length and copies from ud+2), +0x10c dual_sys 0.  This
          build differs from the 2013 header by 4 bytes in the dcs: the
          handler passes body+0x54 (dcs) and body+0x7b (user data) to
          MMISMS_DecodeUserHeadAndContent (call at user 0x08210e60) and
@@ -103,8 +104,8 @@ def body(rid, number, ucs2, ts):
     struct.pack_into("<I", b, 0x58, 1)              # sms_class 1 (class_is_present 0)
     struct.pack_into("<I", b, 0x68, 2)              # alphabet UCS-2
     b[0x74:0x7b] = bytes((ts.year - 2000, ts.month, ts.day, ts.hour, ts.minute, ts.second, 0))
-    b[0x7b] = len(ucs2)
-    b[0x7c:0x7c + len(ucs2)] = ucs2
+    b[0x7c] = len(ucs2)                             # MNSMS_DecodeUserDataEx reads the length at
+    b[0x7d:0x7d + len(ucs2)] = ucs2                 # user_data+1, the data from +2 (user 0x080722be)
     struct.pack_into("<I", b, 0x10c, 0)            # dual_sys SIM1
     return bytes(b)
 
