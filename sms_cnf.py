@@ -47,6 +47,9 @@ class SmsCnf:
         self.active = None      # (saved regs, sp, sig) while our SCI_SendSignal runs
         self.resend = None
         self.requeues = 0
+        import os
+        self.trace = bool(os.environ.get('HANG_TRACE'))
+        self.traced = 0
         self.bpm = blocks_per_ms
         self.n = 0
         self.log = open(machine.args.out / "sms-cnf.log", "w", buffering=1)
@@ -97,6 +100,10 @@ class SmsCnf:
             return
         if code != APP_MN_SEND_SMS_CNF:
             lr = uc.reg_read(arm.UC_ARM_REG_LR)
+            if self.trace and code == 0xe10c and rcv == P_APP and self.traced < 600:
+                self.traced += 1        # HANG_TRACE: every MMK timer signal to the APP task
+                self.w(f"e10c {self.traced}: SCI_SendSignal(0x{sig:08x}, 21) lr 0x{lr:08x} "
+                       f"header {bytes(uc.mem_read(sig, 24)).hex()}")
             if self.requeues < 400 and rcv == P_APP and 0x04100000 <= lr < 0x04300000:
                 self.requeues += 1      # the port requeues a signal it took off the APP queue's head
                 self.w(f"requeue {self.requeues}: SCI_SendSignal(0x{sig:08x} code 0x{code:04x}, 21) lr 0x{lr:08x}")
