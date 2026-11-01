@@ -410,8 +410,8 @@ class Machine:
         self.inject_call = (mt_call.install(self, args.inject_call, BLOCKS_PER_MS, args.inject_call_event)
                             if args.inject_call or args.inject_call_event or args.log_calls
                             or args.fail_startcall is not None else None)
-        self.sms_cnf = (sms_cnf.install(self, args.sms_send_ok, BLOCKS_PER_MS)
-                        if args.sms_send_ok or args.log_sms_cnf else None)
+        self.sms_cnf = (sms_cnf.install(self, args.sms_send_ok, BLOCKS_PER_MS, args.sms_cnf_delay)
+                        if args.sms_send_ok or args.log_sms_cnf or args.sms_cnf_delay else None)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1213,6 +1213,9 @@ def parse_args(argv=None, parser=None):
     p.add_argument("--sms-send-ok", action="store_true",
                    help="answer every MO SMS with APP_MN_SEND_SMS_CNF 0xa1a3 cause 0 (sent), as a real network "
                         "does; without it the networkless MN answers cause 2 (sms_cnf.py); log in OUT/sms-cnf.log")
+    p.add_argument("--sms-cnf-delay", type=int, default=0, metavar="MS",
+                   help="hold each APP_MN_SEND_SMS_CNF to the APP task MS ms (a real network's round trip), then "
+                        "queue it from the APP task's next SCI_PeekSignal (sms_cnf.py)")
     p.add_argument("--log-sms-cnf", action="store_true",
                    help="log each APP_MN_SEND_SMS_CNF 0xa1a3 (cause) to OUT/sms-cnf.log with no change")
     p.add_argument("--log-calls", action="store_true",
