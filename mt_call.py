@@ -218,6 +218,11 @@ class Injector:
         else:
             args = f"dual_sys={r[0]} call_id={r[1] & 0xff} cause={r[2]} utu=0x{r[3]:08x}"
         self.w(f"call {name}({args}) lr=0x{lr:08x}")
+        fail = getattr(self.m.args, "fail_startcall", None)
+        if name == "StartCallEx" and fail is not None:
+            uc.reg_write(arm.UC_ARM_REG_R0, fail & 0xffffffff)
+            uc.reg_write(arm.UC_ARM_REG_PC, lr)          # return at once; lr keeps the caller's Thumb bit
+            self.w(f"--fail-startcall: StartCallEx returns {fail} without running (lr=0x{lr:08x})")
 
 
 def install(machine, specs, blocks_per_ms, events=()):
