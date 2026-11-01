@@ -46,6 +46,7 @@ class SmsCnf:
         self.held = []          # (due_ms, sig, send_addr, thumb)
         self.active = None      # (saved regs, sp, sig) while our SCI_SendSignal runs
         self.resend = None
+        self.requeues = 0
         self.bpm = blocks_per_ms
         self.n = 0
         self.log = open(machine.args.out / "sms-cnf.log", "w", buffering=1)
@@ -95,6 +96,10 @@ class SmsCnf:
         except Exception:  # noqa: BLE001  (not a readable header: not ours)
             return
         if code != APP_MN_SEND_SMS_CNF:
+            lr = uc.reg_read(arm.UC_ARM_REG_LR)
+            if self.requeues < 400 and rcv == P_APP and 0x04100000 <= lr < 0x04300000:
+                self.requeues += 1      # the port requeues a signal it took off the APP queue's head
+                self.w(f"requeue {self.requeues}: SCI_SendSignal(0x{sig:08x} code 0x{code:04x}, 21) lr 0x{lr:08x}")
             return
         cause = struct.unpack("<I", bytes(uc.mem_read(sig + CAUSE_OFF, 4)))[0]
         if self.resend == sig:
