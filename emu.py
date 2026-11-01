@@ -44,6 +44,7 @@ import lcd  # noqa: E402
 import lights  # noqa: E402
 import lzma_engine  # noqa: E402
 import mt_call  # noqa: E402
+import sms_cnf  # noqa: E402
 import mt_sms  # noqa: E402
 import pmic  # noqa: E402
 import sfc  # noqa: E402
@@ -409,6 +410,8 @@ class Machine:
         self.inject_call = (mt_call.install(self, args.inject_call, BLOCKS_PER_MS, args.inject_call_event)
                             if args.inject_call or args.inject_call_event or args.log_calls
                             or args.fail_startcall is not None else None)
+        self.sms_cnf = (sms_cnf.install(self, args.sms_send_ok, BLOCKS_PER_MS)
+                        if args.sms_send_ok or args.log_sms_cnf else None)
         self.keypad = keypad.Keypad(self, args.dump / "unpacked" / "keymap.bin",
                                     log=lambda line: print(f"[block {self.nblocks}] {line}"))
         self.lights = lights.Lights(self, log=lambda line: print(f"[block {self.nblocks}] {line}"))
@@ -1207,6 +1210,11 @@ def parse_args(argv=None, parser=None):
     p.add_argument("--fail-startcall", type=int, default=None, metavar="RET",
                    help="MNCALL_StartCallEx 0x0823f04d refuses every call: it returns RET (non-zero) at once "
                         "without running (mt_call.py); logged to OUT/inject-call.log")
+    p.add_argument("--sms-send-ok", action="store_true",
+                   help="answer every MO SMS with APP_MN_SEND_SMS_CNF 0xa1a3 cause 0 (sent), as a real network "
+                        "does; without it the networkless MN answers cause 2 (sms_cnf.py); log in OUT/sms-cnf.log")
+    p.add_argument("--log-sms-cnf", action="store_true",
+                   help="log each APP_MN_SEND_SMS_CNF 0xa1a3 (cause) to OUT/sms-cnf.log with no change")
     p.add_argument("--log-calls", action="store_true",
                    help="log MNCALL_StartCallEx / ConnectCallEx / DisconnectCallEx calls (name, args, lr, ms) to "
                         "OUT/inject-call.log with no injection (implied by --inject-call / --inject-call-event)")
